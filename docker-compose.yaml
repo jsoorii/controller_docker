@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  mujoco_sim:
+    build: .
+    container_name: ur5e_mujoco_ros2
+    volumes:
+      - .:/ros2_ws/src/my_ur5e_controller
+    network_mode: host  # 원격 접속의 편의성을 위해 host 모드 권장
+    stdin_open: true
+    tty: true
+    privileged: true
+    environment:
+      - DISPLAY=$DISPLAY
+      - MUJOCO_GL=osmesa # GUI가 없는 환경이므로 osmesa 설정
