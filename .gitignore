@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+.env
+
+# 실행 중 생성되는 로그나 임시 파일
+*.log
+install/
+build/
+log/
