@@ -235,9 +235,13 @@ def main():
 
     # --- Main loop (visualization + monitor) ---
     print("\n🚀 제어 및 시각화 루프 가동 중... (Ctrl-C to stop)")
+    vis_counter = 0
     try:
         while True:
-            update_visualizer(vis, model, data)
+            # 시각화는 3Hz (약 17번에 1번), 모니터링은 50Hz
+            if vis_counter % 17 == 0:
+                update_visualizer(vis, model, data)
+            vis_counter += 1
 
             if np.any(np.abs(data.qvel) > 50):
                 print(f"\n⚠️ 물리 불안정 감지! qvel: {data.qvel}")

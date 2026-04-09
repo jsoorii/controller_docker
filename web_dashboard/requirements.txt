@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+docker
+sse-starlette
+python-dotenv
+httpx
+websockets
