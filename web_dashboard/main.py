@@ -4,10 +4,8 @@ Docker 웹 대시보드 - ur5e_mujoco_ros2 컨테이너 제어
 import asyncio
 import json
 import os
-import re
 import secrets
 import subprocess
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -32,53 +30,6 @@ CONTAINER_NAME = "ur5e_mujoco_ros2"
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "heroi")
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
 
-# ── Meshcat 터널 URL ──────────────────────────────────────────────────────────
-meshcat_url: str = ""
-_meshcat_proc: asyncio.subprocess.Process | None = None
-
-
-async def _drain(proc: asyncio.subprocess.Process) -> None:
-    """stdout을 계속 소비해 버퍼 블로킹을 방지한다."""
-    async for _ in proc.stdout:
-        pass
-
-
-async def _start_meshcat_tunnel() -> None:
-    global meshcat_url, _meshcat_proc
-    # 이전 인스턴스가 남긴 좀비 프로세스 제거
-    pkill = await asyncio.create_subprocess_exec(
-        "pkill", "-f", "cloudflared tunnel --url http://localhost:7000",
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-    )
-    await pkill.wait()
-    await asyncio.sleep(0.3)
-
-    _meshcat_proc = await asyncio.create_subprocess_exec(
-        "cloudflared", "tunnel", "--url", "http://localhost:7000",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    async for line in _meshcat_proc.stdout:
-        text = line.decode(errors="replace")
-        m = re.search(r'https://[a-z0-9\-]+\.trycloudflare\.com', text)
-        if m:
-            meshcat_url = m.group(0)
-            print(f"[Meshcat Tunnel] {meshcat_url}", flush=True)
-            asyncio.create_task(_drain(_meshcat_proc))
-            break
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    asyncio.create_task(_start_meshcat_tunnel())
-    yield
-    if _meshcat_proc:
-        _meshcat_proc.terminate()
-        await _meshcat_proc.wait()
-
-
-app = FastAPI(title="Heroi Docker Dashboard", lifespan=lifespan)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 security = HTTPBasic()
 client = docker.from_env()
 
@@ -90,8 +41,12 @@ def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
         raise HTTPException(
             status_code=401,
             detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": 'Basic realm="HeroiDockerDashboard"'},
         )
+
+
+app = FastAPI(title="Heroi Docker Dashboard")
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def get_container():
@@ -102,10 +57,6 @@ def get_container():
 
 
 # ── API ──────────────────────────────────────────────────────────────────────
-
-@app.get("/api/meshcat_url")
-def get_meshcat_url(_: None = Depends(require_auth)):
-    return {"url": meshcat_url}
 
 
 @app.get("/api/status")
@@ -260,7 +211,7 @@ async def pub_joint(body: dict, _: None = Depends(require_auth)):
     data_str = "[" + ", ".join(f"{v:.6f}" for v in joints) + "]"
     cmd = (
         f"source /opt/ros/humble/setup.bash && "
-        f"ros2 topic pub --once /ur5e/cmd/joint_target "
+        f"ros2 topic pub --times 3 /ur5e/cmd/joint_target "
         f"std_msgs/msg/Float64MultiArray '{{data: {data_str}}}'"
     )
     container = get_container()
@@ -313,10 +264,10 @@ async def robot_3d(_: None = Depends(require_auth)):
 async def meshcat_index(_: None = Depends(require_auth)):
     async with httpx.AsyncClient() as client:
         r = await client.get("http://localhost:7000/static/")
-    # WebSocket URL을 /meshcat-ws로 재작성
+    # main.min.js를 절대경로로 재작성 → meshcat_static() 핸들러가 WebSocket URL도 재작성
     html = r.content.replace(
-        b"ws://${location.host}",
-        b"(location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/meshcat-ws'"
+        b'src="main.min.js"',
+        b'src="/meshcat/main.min.js"'
     )
     return Response(content=html, media_type="text/html")
 
@@ -373,7 +324,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(_: None = Depends(require_auth)):
+def index():
     return (STATIC / "index.html").read_text()
 
 

@@ -1,85 +1,201 @@
-# UR5e MuJoCo Simulation via Meshcat (ROS2 Humble)
+# Heroi — UR5e MuJoCo Simulation & Web Dashboard
 
-## 1. 시스템 아키텍처
-본 환경은 원격 리눅스 서버에서 Docker 컨테이너로 실행되며, 웹 브라우저를 통해 시뮬레이션 시각화 결과를 확인합니다.
-
-* **Compute Node (Remote Linux):** Docker, ROS2 Humble, MuJoCo, Meshcat Server
-* **Client Node (Mac):** VSCode (Remote SSH), Web Browser (Chrome)
-
-## 2. 제어 흐름 (Control Flow)
-1.  **Input:** 사용자가 ROS2 Topic(`joint_trajectory_controller` 등)으로 목표 값을 발행합니다.
-2.  **Controller:** ROS2 Controller가 목표 값과 현재 상태를 비교하여 제어 입력을 계산합니다.
-3.  **Hardware Interface (MuJoCo Bridge):** 계산된 토크/위치 값을 MuJoCo API를 통해 가상 로봇에 전달합니다.
-4.  **Simulation:** MuJoCo 엔진이 물리 연산을 수행하고 로봇의 상태를 업데이트합니다.
-5.  **Visualization:** MuJoCo의 상태 데이터를 Meshcat 서버로 전송하여 브라우저에서 렌더링합니다.
-
-현재까지 구축된 환경의 **폴더 구조**를 포함하여, 지금까지의 작업 내용과 수정 사항을 정리한 최종 리포트(`PROJECT_STATE.md`)입니다. 
-
-이 구조를 유지하면 나중에 ROS2 패키지로 확장하거나 다른 로봇 모델을 추가할 때 매우 관리가 용이해집니다.
+UR5e 로봇팔을 MuJoCo로 시뮬레이션하고, 웹 브라우저에서 원격으로 제어·모니터링하는 풀스택 프로젝트.
 
 ---
 
-# 📝 UR5e MuJoCo-Meshcat 프로젝트 상태 보고서
+## 시스템 아키텍처
 
-## 1. 프로젝트 디렉토리 구조 (Current Directory Tree)
-
-현재 호스트 리눅스 서버(`~/heroi/`)와 Docker 컨테이너 내부가 `volumes`로 연결된 구조입니다.
-
-```text
-/home/jsoori/heroi/                  # 프로젝트 루트 (호스트)
-├── Dockerfile                       # ROS2 Humble + MuJoCo 빌드 정의
-├── docker-compose.yaml              # 컨테이너 및 네트워크(Port 7000) 설정
-├── ros_entrypoint.sh                # 컨테이너 시작 시 ROS2 환경 로드 스크립트
-└── my_ur5e_controller/              # 메인 작업 폴더 (컨테이너의 /ros2_ws/src/에 마운트)
-    ├── view_ur5e.py                 # [최종] 메쉬 기반 시각화 실행 코드
-    └── (기타 테스트 스크립트)
-        
-# 컨테이너 내부 전용 (빌드 시 생성됨)
-/ros2_ws/src/
-└── mujoco_menagerie/               # DeepMind의 로봇 모델 저장소 (Git Clone됨)
-    └── universal_robots_ur5e/      # UR5e의 .xml 및 .obj 메쉬 파일 위치
+```
+[Mac / 원격 브라우저]
+        │  HTTPS (Cloudflare Tunnel)
+        ▼
+[Web Dashboard  — FastAPI, port 8765]
+        │  Docker SDK  │  ROS2 topic pub  │  MuJoCo render
+        ▼              ▼                  ▼
+[Docker Container: ur5e_mujoco_ros2]
+  ├─ MuJoCo Physics Engine (UR5e XML)
+  ├─ PD Controller thread  (500 Hz)
+  ├─ Meshcat Visualizer    (port 7000)
+  └─ ROS2 Humble middleware
 ```
 
 ---
 
-## 2. 작업 히스토리 및 트러블슈팅 요약
+## 디렉토리 구조
 
-| 단계 | 발생한 문제 | 원인 분석 | 해결 방법 |
-| :--- | :--- | :--- | :--- |
-| **환경 구축** | `ros_entrypoint.sh` Not Found | 빌드 컨텍스트에 파일 부재 | 호스트에 파일 생성 후 `docker compose build` |
-| **권한 설정** | `EACCES: permission denied` | Docker(root) 생성 폴더 소유권 문제 | `sudo chown -R $USER:$USER` 실행 |
-| **시각화 연결** | 터미널 멈춤 (Hang) | Meshcat 서버 미가동 대기 | `vis = meshcat.Visualizer()`로 자동 서버 실행 |
-| **도형 렌더링** | `AttributeError: ... Axes` | 라이브러리에 `Axes` 속성 없음 | `g.Box`로 대체하여 위치 우선 확인 |
-| **메쉬 로딩** | `AssertionError: Nx3 array` | MuJoCo와 Meshcat의 행렬 차원 불일치 | `vertices.T` 제거 (Nx3 데이터 그대로 전달) |
-
----
-
-## 3. 핵심 시스템 개략도 및 제어 흐름
-
-### **[시스템 아키텍처]**
-1.  **MuJoCo Engine**: `ur5e.xml`을 읽어 물리 법칙(중력, 마찰, 충돌) 적용 및 로봇 상태 계산.
-2.  **Python Bridge (`view_ur5e.py`)**: 
-    * MuJoCo에서 각 조인트의 전역 위치(`xpos`)와 회전(`xmat`) 추출.
-    * Meshcat 비주얼라이저로 4x4 변환 행렬 전송.
-3.  **Meshcat Server**: ZMQ 통신을 통해 받은 데이터를 7000번 포트로 웹 스트리밍.
-4.  **User Browser**: Mac Chrome에서 실시간 로봇 움직임 모니터링.
-
-
+```
+heroi/
+├── Dockerfile                        # ROS2 Humble + MuJoCo 빌드 이미지
+├── docker-compose.yaml               # 컨테이너 오케스트레이션 (port 7000)
+├── ros_entrypoint.sh                 # ROS2 환경 소싱 스크립트
+├── CHANGE.md                         # 변경 이력 (날짜 · 설명 · 롤백 커밋)
+├── SUMMARY.md                        # 기술 상세 문서
+├── my_ur5e_controller/
+│   ├── ur5e_rt_controller.py         # 실시간 PD 컨트롤러 (상태 머신)
+│   ├── view_ur5e.py                  # Meshcat 메쉬 시각화 단독 스크립트
+│   └── main_test.py                  # 메인 진입점 (컨트롤러 + 시각화)
+└── web_dashboard/
+    ├── main.py                       # FastAPI 백엔드
+    ├── render_snapshot.py            # MuJoCo 오프스크린 렌더러 (이미지 / 3D 프레임)
+    ├── launch.sh                     # 서버 + Cloudflare 터널 한번에 실행
+    ├── requirements.txt
+    ├── .env                          # 인증 정보 (git 제외)
+    └── static/index.html             # 웹 대시보드 프론트엔드
+```
 
 ---
 
-## 4. 최종 실행 코드의 주요 특징
-* **자동 서버 시작**: `vis = meshcat.Visualizer()`를 통해 별도의 서버 구동 없이 즉시 실행 가능.
-* **실제 메쉬 반영**: 단순 상자가 아닌 `TriangularMeshGeometry`를 사용하여 UR5e의 실제 외형 렌더링.
-* **실시간 동기화**: `while` 루프 내에서 MuJoCo의 물리 스텝과 시각화 업데이트 속도를 일치시킴.
+## 기술 스택
+
+| 레이어 | 기술 |
+|---|---|
+| 물리 시뮬레이션 | MuJoCo (DeepMind) |
+| 3D 시각화 | Meshcat (ZMQ + Three.js) |
+| 미들웨어 | ROS2 Humble |
+| 컨테이너 | Docker + Docker Compose |
+| 백엔드 | FastAPI + Docker SDK (Python) |
+| 터널 | Cloudflare Tunnel (cloudflared) |
+| 인증 | HTTP Basic Auth + HTML 로그인 오버레이 |
 
 ---
 
-## 5. 다음 단계 (Next Milestone)
-현재는 단순히 시각화만 수행하는 단계입니다. 다음 단계는 **ROS2와의 완전한 통합**입니다.
+## 현재 구현된 기능
 
-1.  **Joint State Publisher**: MuJoCo의 관절 상태를 ROS2 메시지로 발행.
-2.  **Robot State Publisher**: URDF와 연동하여 TF(Transform) 트리 구성.
-3.  **Controller**: ROS2 Topic 명령을 받아 MuJoCo 로봇의 모터를 구동.
+### 시뮬레이션 (Docker 컨테이너 내)
+- **MuJoCo 물리 엔진** — UR5e XML 로드, 중력·충돌·마찰 연산
+- **PD 컨트롤러 (500 Hz)** — 5단계 상태 머신, Kp=500 / Kd=50
+  ```
+  WAIT_STABLE → INIT_CONTROL → CHECK_MOTOR → INIT_POSITION → RUN_CONTROL
+  ```
+- **Task-space IK** — Damped Least Squares로 EE 위치/자세 추종 (6×6 Jacobian)
+- **제어 모드 전환** — Joint-space ↔ Task-space 실시간 전환
+- **Meshcat 웹 시각화 (port 7000)** — TriangularMeshGeometry로 실제 UR5e 외형 렌더링
+- **멀티스레드** — 500 Hz 제어 스레드 / 50 Hz 시각화 메인 스레드 분리
 
-위 구조대로 잘 정리되셨나요? 이제 이 환경 위에서 로봇을 움직이는 **ROS2 노드** 작성을 시작해볼 준비가 되셨다면 알려주세요!
+### ROS2 인터페이스
+| 방향 | 토픽 | 타입 | 설명 |
+|---|---|---|---|
+| Subscribe | `/ur5e/cmd/joint_target` | `Float64MultiArray` | 6개 관절 목표값 (rad) |
+| Subscribe | `/ur5e/cmd/ee_target` | `PoseStamped` | EE 목표 위치·자세 (task-space) |
+| Subscribe | `/ur5e/cmd/mode` | `Bool` | true=task-space / false=joint-space |
+| Publish | `/ur5e/state/joint` | `JointState` | 관절 위치·속도 (50 Hz) |
+| Publish | `/ur5e/state/ee_pose` | `PoseStamped` | EE 현재 위치·자세 (50 Hz) |
+
+### 웹 대시보드 (port 8765)
+- **컨테이너 제어** — 시작 / 중지 / 재시작 버튼 (5초마다 상태 자동 갱신)
+- **실시간 로그 스트리밍** — fetch + ReadableStream 방식, 중지·지우기 가능
+- **브라우저 명령 실행** — 컨테이너 내 임의 명령 직접 입력
+- **3D 로봇 뷰어** — MuJoCo 오프스크린 렌더, 마우스 드래그 2축 회전
+  - 방위각 12단계 × 고도각 5단계 = 60프레임 사전 렌더
+  - 가로 드래그 = 방위각, 세로 드래그 = 고도각
+- **ROS2 Joint 명령** — `/api/pub/joint` 엔드포인트로 관절 목표값 퍼블리시
+- **인증** — 커스텀 HTML 로그인 오버레이 + sessionStorage 캐시, API는 HTTP Basic Auth 보호
+
+### 외부 접속
+- **Cloudflare Tunnel** — 고정 IP 없이 외부 HTTPS URL 자동 생성
+
+---
+
+## 빠른 시작
+
+### 1. 시뮬레이션 컨테이너 실행
+
+```bash
+# 이미지 빌드 및 컨테이너 시작
+docker compose build
+docker compose up -d
+
+# 컨테이너 내에서 시뮬레이션 실행
+docker exec -it ur5e_mujoco_ros2 python3 \
+  /ros2_ws/src/my_ur5e_controller/main_test.py
+
+# 브라우저에서 확인 (동일 머신 또는 SSH 터널)
+# http://localhost:7000
+```
+
+### 2. 웹 대시보드 실행
+
+```bash
+cd web_dashboard
+
+# .env 파일 생성 (최초 1회)
+echo "AUTH_USERNAME=heroi" > .env
+echo "AUTH_PASSWORD=<비밀번호>" >> .env
+
+# launch.sh 로 서버 + 터널 한번에 실행
+./launch.sh
+```
+cd src/my_ur5e_controller/my_ur5e_controller/ && nohup python3 main_test.py > /tmp/heroi-dashboard.log 2>&1 &
+
+실행 시 출력 예시:
+```
+[1/3] 기존 프로세스 정리 중...
+[2/3] 대시보드 서버 시작 중...
+    ✓ 서버 실행 완료 (PID: 12345)
+    로컬 주소: http://192.168.x.x:8765
+[3/3] Cloudflare 터널 시작 중...
+    ✓ 터널 연결 완료 (PID: 12346)
+    외부 주소: https://xxxx-xxxx.trycloudflare.com
+```
+
+터널 없이 로컬만:
+```bash
+./launch.sh --no-tunnel
+```
+
+---
+
+## API 엔드포인트
+
+모든 엔드포인트는 HTTP Basic Auth 필요 (`GET /` 제외).
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/status` | 컨테이너 상태 조회 |
+| POST | `/api/start` | 컨테이너 시작 (`docker compose up -d --build`) |
+| POST | `/api/stop` | 컨테이너 중지 |
+| POST | `/api/restart` | 컨테이너 재시작 |
+| POST | `/api/exec` | 컨테이너 내 명령 실행 |
+| POST | `/api/exec_bg` | 백그라운드 명령 실행 |
+| POST | `/api/exec_stream` | 명령 실행 + 스트리밍 출력 |
+| GET | `/api/logs` | 실시간 로그 스트리밍 (`?lines=200`) |
+| POST | `/api/pub/joint` | ROS2 joint 명령 퍼블리시 |
+| GET | `/api/robot_image` | MuJoCo 로봇 이미지 렌더링 |
+| GET | `/api/robot_3d` | MuJoCo 3D 터닝테이블 프레임 (60장) |
+| GET | `/meshcat` | Meshcat 3D 뷰어 프록시 |
+
+---
+
+## 관리 명령어
+
+```bash
+# 로그 실시간 확인
+tail -f /tmp/heroi-dashboard.log
+tail -f /tmp/heroi-tunnel.log
+
+# 프로세스 확인
+pgrep -a -f "python3 main.py"
+pgrep -a -f "cloudflared tunnel"
+
+# 종료
+pkill -f "python3 main.py"
+pkill -f "cloudflared tunnel --url http://localhost:8765"
+
+# 외부 터널 URL 확인
+grep -o "https://[^ ]*trycloudflare.com" /tmp/heroi-tunnel.log
+```
+
+---
+
+## TODO(긴급!)
+1. docker 내에서 main_test.py가 여러개 실행되고 있을 경우 확인하는 프로세스 필요.
+2. 웹 ui에서 main_test.py 모두 종료하고, 백그라운드에서 실행시키는 명령어버튼(cd src/my_ur5e_controller/my_ur5e_controller/ && nohup python3 main_test.py > /tmp/heroi-dashboard.log 2>&1 &) 필요.
+3. 현재 도커 내부에서 src/my_ur5e...폴더안에 web관련 코드들이 있는데, 계층 정리 필요.
+4. 웹과 컨트롤러 README가 따로 작성되어 있음, 하나로 통합 필요함.
+
+#TODO
+3. **Robot State Publisher / TF 트리** — URDF 연동, `robot_state_publisher`로 TF 프레임 구성
+4. **JointTrajectory 인터페이스** — 현재 `Float64MultiArray` → `trajectory_msgs/JointTrajectory`로 전환, 궤적 보간 지원
+5. **대시보드 실시간 조인트 슬라이더** — 웹 UI에서 직접 각 조인트 목표값 입력
+6. **경로 계획 연동** — MoveIt2와 연결하여 충돌 회피 경로 계획

@@ -474,7 +474,7 @@
   }
 
   // ── 로봇 3D 터닝테이블 ────────────────────────────────────────────────────
-  let _3d = { frames: [], nAz: 24, nEl: 5, azIdx: 0, elIdx: 2, drag: null };
+  let _3d = { frames: [], nAz: 12, nEl: 5, azIdx: 0, elIdx: 2, drag: null };
 
   async function fetch3D() {
     const status = document.getElementById('view3d-status');
@@ -507,7 +507,7 @@
     }
     function onMove(x, y) {
       if (!_3d.drag || !_3d.frames.length) return;
-      const dAz = Math.round((x - _3d.drag.startX) / 12);
+      const dAz = Math.round((x - _3d.drag.startX) / 24);
       const dEl = Math.round((y - _3d.drag.startY) / 20);
       _3d.azIdx = ((_3d.drag.startAz - dAz) % _3d.nAz + _3d.nAz) % _3d.nAz;
       _3d.elIdx = Math.max(0, Math.min(_3d.nEl - 1, _3d.drag.startEl + dEl));

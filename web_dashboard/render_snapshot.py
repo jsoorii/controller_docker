@@ -40,7 +40,7 @@ except Exception:
 
 mujoco.mj_forward(model, data)
 
-N_AZ = 24                                          # 방위각 단계 (15°씩 × 24 = 360°)
+N_AZ = 12                                          # 방위각 단계 (30°씩 × 12 = 360°)
 N_EL = 5                                           # 앙각 단계
 ELEVATIONS = [-55.0, -40.0, -25.0, -10.0, 5.0]   # 아래→위 순서
 LOOKAT = [0.0, 0.0, 0.5]
