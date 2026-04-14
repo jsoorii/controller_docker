@@ -77,6 +77,16 @@
   </div>
 </div>
 
+<!-- 충돌 감지 배너 -->
+<div id="collision-banner" style="display:none; position:sticky; top:0; z-index:1050;
+     background:#dc3545; color:#fff; padding:10px 20px;
+     display:none; align-items:center; justify-content:space-between; gap:12px;">
+  <span id="collision-msg" style="font-weight:600; font-size:0.95rem;"></span>
+  <button class="btn btn-light btn-sm fw-bold" onclick="resetCollision()" style="white-space:nowrap;">
+    충돌 정지 해제
+  </button>
+</div>
+
 <div class="container py-4">
   <h3 class="mb-4">🤖 Heroi Docker Dashboard</h3>
 
@@ -99,6 +109,49 @@
       <button class="btn btn-success" onclick="action('start')">▶ 시작</button>
       <button class="btn btn-danger"  onclick="action('stop')">■ 중지</button>
       <button class="btn btn-warning" onclick="action('restart')">↺ 재시작</button>
+      <button class="btn btn-dark"    onclick="startRebuild()">🔨 재빌드 후 재시작</button>
+    </div>
+  </div>
+
+  <!-- 재빌드 출력 -->
+  <div class="card mb-3" id="rebuild-card" style="display:none;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      재빌드 출력
+      <button class="btn btn-sm btn-outline-secondary" onclick="clearRebuild()">지우기</button>
+    </div>
+    <div class="card-body p-2">
+      <div id="rebuild-output" style="
+        font-family: monospace; font-size: 0.8rem;
+        background: #212529; color: #a8ff78;
+        border-radius: 6px; padding: 10px;
+        height: 300px; overflow-y: auto;
+        white-space: pre-wrap; word-break: break-all;">
+      </div>
+    </div>
+  </div>
+
+  <!-- 시뮬레이션 프로세스 모니터 -->
+  <div class="card mb-3" id="sim-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      시뮬레이션 프로세스 (main_test.py)
+      <div class="d-flex gap-2 align-items-center">
+        <span id="sim-count-badge" class="badge bg-secondary">확인 중…</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="fetchSimStatus()">🔄 새로고침</button>
+        <button class="btn btn-sm btn-danger" onclick="killAllSim()">⏹ 전체 종료</button>
+        <button class="btn btn-sm btn-success" onclick="simRestart()">▶ 종료 후 재시작</button>
+      </div>
+    </div>
+    <div id="sim-warn" class="alert alert-danger d-none m-2 mb-0 py-2 px-3" style="font-size:0.85rem;">
+      ⚠ main_test.py 프로세스가 여러 개 실행 중입니다. 중복 제어가 발생할 수 있습니다.
+    </div>
+    <div class="card-body p-2">
+      <div id="sim-proc-list" style="
+        font-family: monospace; font-size: 0.8rem;
+        background: #212529; color: #a8ff78;
+        border-radius: 6px; padding: 10px;
+        min-height: 48px; white-space: pre-wrap; word-break: break-all;">
+        데이터 없음
+      </div>
     </div>
   </div>
 
@@ -120,16 +173,157 @@
     </div>
   </div>
 
-  <!-- 조인트 제어 -->
+  <!-- 로봇 제어 (탭) -->
   <div class="card mb-3">
-    <div class="card-header">조인트 제어 (rad)</div>
-    <div class="card-body">
-      <div id="joint-inputs"></div>
-      <div class="d-flex gap-2 mt-3">
-        <button class="btn btn-success" onclick="sendJoint()">전송</button>
-        <button class="btn btn-outline-secondary" onclick="resetJoints()">초기화</button>
+    <div class="card-header d-flex justify-content-between align-items-center">
+      로봇 제어
+      <span id="mode-badge" class="badge bg-secondary">–</span>
+    </div>
+    <div class="card-body p-0">
+      <!-- 탭 헤더 -->
+      <ul class="nav nav-tabs px-3 pt-2" id="ctrl-tabs">
+        <li class="nav-item">
+          <button class="nav-link active" id="tab-btn-joint" onclick="switchCtrlTab('joint')">🦾 Joint-space</button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link" id="tab-btn-task" onclick="switchCtrlTab('task')">🎯 Task-space</button>
+        </li>
+      </ul>
+
+      <!-- Joint-space 탭 -->
+      <div id="tab-joint" class="p-3">
+        <div id="joint-inputs"></div>
+        <div class="row g-2 mt-2 align-items-center">
+          <div class="col-auto"><label class="form-label small mb-0">소요 시간 (s)</label></div>
+          <div class="col-3">
+            <input type="number" id="joint-duration" class="form-control form-control-sm"
+                   value="2.0" min="0.1" step="0.5"/>
+          </div>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+          <button class="btn btn-success" onclick="sendJoint()">전송</button>
+          <button class="btn btn-outline-secondary" onclick="resetJoints()">초기화</button>
+          <button class="btn btn-outline-info" onclick="loadJointFromState()" title="현재 로봇 관절값을 입력창에 불러옵니다">
+            ↙ 현재값 불러오기
+          </button>
+        </div>
+        <div id="joint-status" class="text-muted small mt-2"></div>
       </div>
-      <div id="joint-status" class="text-muted small mt-2"></div>
+
+      <!-- Task-space 탭 -->
+      <div id="tab-task" class="p-3" style="display:none;">
+        <div class="row g-2 mb-3">
+          <div class="col-12"><small class="text-muted fw-bold">Position (m)</small></div>
+          <div class="col-4">
+            <label class="form-label small mb-1">X</label>
+            <input type="number" id="ee-x" class="form-control form-control-sm" value="0.400" step="0.01" />
+          </div>
+          <div class="col-4">
+            <label class="form-label small mb-1">Y</label>
+            <input type="number" id="ee-y" class="form-control form-control-sm" value="0.000" step="0.01" />
+          </div>
+          <div class="col-4">
+            <label class="form-label small mb-1">Z</label>
+            <input type="number" id="ee-z" class="form-control form-control-sm" value="0.500" step="0.01" />
+          </div>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-12"><small class="text-muted fw-bold">Orientation — Euler (deg)</small></div>
+          <div class="col-4">
+            <label class="form-label small mb-1">Roll</label>
+            <input type="number" id="ee-roll" class="form-control form-control-sm" value="180" step="1" />
+          </div>
+          <div class="col-4">
+            <label class="form-label small mb-1">Pitch</label>
+            <input type="number" id="ee-pitch" class="form-control form-control-sm" value="0" step="1" />
+          </div>
+          <div class="col-4">
+            <label class="form-label small mb-1">Yaw</label>
+            <input type="number" id="ee-yaw" class="form-control form-control-sm" value="0" step="1" />
+          </div>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-12"><small class="text-muted fw-bold">Orientation — Quaternion (읽기 전용)</small></div>
+          <div class="col-3"><label class="form-label small mb-1">X</label><input type="text" id="quat-x" class="form-control form-control-sm" readonly /></div>
+          <div class="col-3"><label class="form-label small mb-1">Y</label><input type="text" id="quat-y" class="form-control form-control-sm" readonly /></div>
+          <div class="col-3"><label class="form-label small mb-1">Z</label><input type="text" id="quat-z" class="form-control form-control-sm" readonly /></div>
+          <div class="col-3"><label class="form-label small mb-1">W</label><input type="text" id="quat-w" class="form-control form-control-sm" readonly /></div>
+        </div>
+        <div class="row g-2 mb-2 align-items-center">
+          <div class="col-auto"><label class="form-label small mb-0">소요 시간 (s, 0=자동)</label></div>
+          <div class="col-2">
+            <input type="number" id="ee-duration" class="form-control form-control-sm"
+                   value="3.0" min="0" step="0.5"/>
+          </div>
+          <div class="col-auto"><label class="form-label small mb-0">출발 속도 (m/s)</label></div>
+          <div class="col-2">
+            <input type="number" id="ee-vel-start" class="form-control form-control-sm"
+                   value="0.0" min="0" step="0.05"/>
+          </div>
+          <div class="col-auto"><label class="form-label small mb-0">도착 속도 (m/s)</label></div>
+          <div class="col-2">
+            <input type="number" id="ee-vel-end" class="form-control form-control-sm"
+                   value="0.0" min="0" step="0.05"/>
+          </div>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-success" onclick="sendEE()">전송</button>
+          <button class="btn btn-outline-secondary" onclick="resetEE()">초기화</button>
+          <button class="btn btn-outline-info" onclick="loadEEFromState()" title="현재 EE 위치·자세를 입력창에 불러옵니다">
+            ↙ 현재값 불러오기
+          </button>
+        </div>
+        <div id="ee-status" class="text-muted small mt-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 소프트 관절 한계 설정 -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      소프트 관절 한계 (속도 감속)
+      <span id="sl-sync-badge" class="text-muted small"></span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3 align-items-end">
+        <div class="col-auto d-flex align-items-center gap-2">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="sl-enabled" checked
+                   style="width:2.5em; height:1.3em; cursor:pointer;" />
+            <label class="form-check-label small fw-bold" for="sl-enabled">활성화</label>
+          </div>
+        </div>
+        <div class="col">
+          <label class="form-label small mb-1">
+            여유 구간
+            <span class="text-muted">(한계 안쪽 %)</span>
+          </label>
+          <div class="d-flex align-items-center gap-2">
+            <input type="range" class="form-range" id="sl-margin-range"
+                   min="0" max="40" step="1" value="5"
+                   oninput="document.getElementById('sl-margin-val').textContent=this.value+'%'"
+                   style="flex:1" />
+            <span id="sl-margin-val" style="width:3em; text-align:right; font-family:monospace; font-size:0.9rem;">5%</span>
+          </div>
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">반발 강성 kp</label>
+          <input type="number" id="sl-kp" class="form-control form-control-sm"
+                 value="200" min="0" max="2000" step="10" style="width:90px" />
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">감쇠 kd</label>
+          <input type="number" id="sl-kd" class="form-control form-control-sm"
+                 value="20" min="0" max="200" step="1" style="width:80px" />
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-primary btn-sm" onclick="applySoftLimits()">적용</button>
+        </div>
+      </div>
+      <div class="mt-2" style="font-size:0.8rem; color:#6c757d;">
+        여유 구간: 관절 범위 양 끝에서 설정값% 이내 진입 시 반발 토크 + 속도 감쇠 적용.
+        <br>예) 5% → shoulder_pan(±360°) 기준 양끝 18° 이내에서 감속 시작.
+      </div>
     </div>
   </div>
 
@@ -158,23 +352,43 @@
     </div>
   </div>
 
-  <!-- 로봇 3D 뷰어 -->
+  <!-- 로봇 현재 상태 -->
   <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-      로봇 3D 뷰어
+      로봇 현재 상태
       <div class="d-flex gap-2 align-items-center">
-        <span id="view3d-status" class="text-muted small"></span>
-        <button class="btn btn-sm btn-outline-secondary" onclick="fetch3D()">🔄 렌더링</button>
+        <span id="robot-state-ts" class="text-muted small"></span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="fetchRobotState()">🔄</button>
       </div>
     </div>
-    <div class="card-body text-center p-2">
-      <div id="view3d-hint" class="text-muted small mb-2">버튼을 눌러 3D 뷰를 로드합니다.</div>
-      <div id="view3d-wrap" style="display:none; position:relative; display:inline-block; cursor:grab; user-select:none;">
-        <img id="view3d-img" src="" alt="" draggable="false"
-             style="display:block; border-radius:8px; max-width:360px; width:100%;" />
-        <div style="position:absolute; bottom:6px; left:0; right:0; text-align:center;
-                    font-size:0.7rem; color:rgba(255,255,255,0.7); pointer-events:none;">
-          ← 드래그해서 회전 →
+    <div class="card-body p-3">
+      <div class="row g-3">
+        <!-- 조인트 위치 + 한계 -->
+        <div class="col-12">
+          <small class="text-muted fw-bold d-block mb-2">조인트 위치 / 한계</small>
+          <table class="table table-sm table-bordered mb-0" style="font-size:0.82rem;">
+            <thead class="table-light">
+              <tr>
+                <th style="width:110px">Joint</th>
+                <th style="width:70px">현재값</th>
+                <th>범위 내 위치</th>
+                <th style="width:120px">한계 (deg)</th>
+              </tr>
+            </thead>
+            <tbody id="state-joint-body">
+              <tr><td colspan="4" class="text-muted text-center">대기 중…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- EE 포즈 -->
+        <div class="col-md-5">
+          <small class="text-muted fw-bold d-block mb-2">End-Effector 포즈</small>
+          <table class="table table-sm table-bordered mb-0" style="font-family:monospace; font-size:0.82rem;">
+            <thead class="table-light"><tr><th>항목</th><th>값</th></tr></thead>
+            <tbody id="state-ee-body">
+              <tr><td colspan="2" class="text-muted text-center">대기 중…</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -274,6 +488,45 @@
     fetchStatus();
   }
 
+  // ── 재빌드 ───────────────────────────────────────────────────────────────
+  let rebuildController = null;
+
+  async function startRebuild() {
+    if (!confirm('컨테이너를 내리고 이미지를 재빌드합니다.\n수 분 소요될 수 있습니다. 진행하시겠습니까?')) return;
+    const card = document.getElementById('rebuild-card');
+    const box  = document.getElementById('rebuild-output');
+    card.style.display = 'block';
+    box.textContent = '';
+    card.scrollIntoView({ behavior: 'smooth' });
+
+    if (rebuildController) rebuildController.abort();
+    rebuildController = new AbortController();
+
+    try {
+      const res = await apiFetch('/api/rebuild', {
+        method: 'POST',
+        signal: rebuildController.signal,
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        box.textContent += decoder.decode(value, { stream: true });
+        box.scrollTop = box.scrollHeight;
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') box.textContent += '\n[연결 끊김]\n';
+    }
+    fetchStatus();
+  }
+
+  function clearRebuild() {
+    if (rebuildController) { rebuildController.abort(); rebuildController = null; }
+    document.getElementById('rebuild-output').textContent = '';
+    document.getElementById('rebuild-card').style.display = 'none';
+  }
+
   // ── 명령 실행 ─────────────────────────────────────────────────────────────
   async function execCmd() {
     const cmd = document.getElementById('cmd-input').value.trim();
@@ -288,6 +541,105 @@
     const d = await res.json();
     document.getElementById('cmd-output').textContent =
       `[exit ${d.exit_code}]\n${d.output}`;
+  }
+
+  // ── 컨트롤 탭 전환 ───────────────────────────────────────────────────────
+  function switchCtrlTab(tab) {
+    document.getElementById('tab-joint').style.display = tab === 'joint' ? 'block' : 'none';
+    document.getElementById('tab-task').style.display  = tab === 'task'  ? 'block' : 'none';
+    document.getElementById('tab-btn-joint').classList.toggle('active', tab === 'joint');
+    document.getElementById('tab-btn-task').classList.toggle('active', tab === 'task');
+    setMode(tab === 'task');
+  }
+
+  // ── 제어 모드 ─────────────────────────────────────────────────────────────
+  async function setMode(taskSpace) {
+    const status = document.getElementById('mode-status');
+    const badge  = document.getElementById('mode-badge');
+    status.textContent = '전송 중…';
+    const res = await apiFetch('/api/pub/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_space: taskSpace }),
+    });
+    if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
+    badge.textContent = taskSpace ? 'Task-space' : 'Joint-space';
+    badge.className   = 'badge ' + (taskSpace ? 'bg-success' : 'bg-primary');
+    status.textContent = '전환 완료';
+  }
+
+  // ── Task-space 제어 ───────────────────────────────────────────────────────
+  function eulerToQuat(rollDeg, pitchDeg, yawDeg) {
+    const r = rollDeg  * Math.PI / 180;
+    const p = pitchDeg * Math.PI / 180;
+    const y = yawDeg   * Math.PI / 180;
+    const cr = Math.cos(r/2), sr = Math.sin(r/2);
+    const cp = Math.cos(p/2), sp = Math.sin(p/2);
+    const cy = Math.cos(y/2), sy = Math.sin(y/2);
+    return {
+      w:  cr*cp*cy + sr*sp*sy,
+      x:  sr*cp*cy - cr*sp*sy,
+      y:  cr*sp*cy + sr*cp*sy,
+      z:  cr*cp*sy - sr*sp*cy,
+    };
+  }
+
+  function updateQuat() {
+    const q = eulerToQuat(
+      parseFloat(document.getElementById('ee-roll').value)  || 0,
+      parseFloat(document.getElementById('ee-pitch').value) || 0,
+      parseFloat(document.getElementById('ee-yaw').value)   || 0,
+    );
+    document.getElementById('quat-x').value = q.x.toFixed(4);
+    document.getElementById('quat-y').value = q.y.toFixed(4);
+    document.getElementById('quat-z').value = q.z.toFixed(4);
+    document.getElementById('quat-w').value = q.w.toFixed(4);
+  }
+
+  ['ee-roll','ee-pitch','ee-yaw'].forEach(id =>
+    document.getElementById(id).addEventListener('input', updateQuat)
+  );
+  updateQuat();
+
+  async function sendEE() {
+    const status = document.getElementById('ee-status');
+    const q = eulerToQuat(
+      parseFloat(document.getElementById('ee-roll').value)  || 0,
+      parseFloat(document.getElementById('ee-pitch').value) || 0,
+      parseFloat(document.getElementById('ee-yaw').value)   || 0,
+    );
+    const duration  = parseFloat(document.getElementById('ee-duration').value)  || 0;
+    const vel_start = parseFloat(document.getElementById('ee-vel-start').value) || 0;
+    const vel_end   = parseFloat(document.getElementById('ee-vel-end').value)   || 0;
+    const body = {
+      position:    { x: parseFloat(document.getElementById('ee-x').value) || 0,
+                     y: parseFloat(document.getElementById('ee-y').value) || 0,
+                     z: parseFloat(document.getElementById('ee-z').value) || 0 },
+      orientation: { x: q.x, y: q.y, z: q.z, w: q.w },
+      duration, vel_start, vel_end,
+    };
+    status.textContent = '전송 중…';
+    const res = await apiFetch('/api/pub/ee', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
+    const d = await res.json();
+    status.textContent = d.ok
+      ? `전송 완료 (${body.position.x.toFixed(3)}, ${body.position.y.toFixed(3)}, ${body.position.z.toFixed(3)})`
+      : `오류: ${d.output}`;
+  }
+
+  function resetEE() {
+    document.getElementById('ee-x').value     = '0.400';
+    document.getElementById('ee-y').value     = '0.000';
+    document.getElementById('ee-z').value     = '0.500';
+    document.getElementById('ee-roll').value  = '180';
+    document.getElementById('ee-pitch').value = '0';
+    document.getElementById('ee-yaw').value   = '0';
+    updateQuat();
+    document.getElementById('ee-status').textContent = '';
   }
 
   // ── 조인트 제어 ───────────────────────────────────────────────────────────
@@ -333,12 +685,13 @@
 
   async function sendJoint() {
     const joints = getJointValues();
+    const duration = parseFloat(document.getElementById('joint-duration').value) || 2.0;
     const status = document.getElementById('joint-status');
     status.textContent = '전송 중…';
     const res = await apiFetch('/api/pub/joint', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ joints }),
+      body: JSON.stringify({ joints, duration }),
     });
     if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
     const d = await res.json();
@@ -473,57 +826,6 @@
     document.getElementById('log-box').textContent = '';
   }
 
-  // ── 로봇 3D 터닝테이블 ────────────────────────────────────────────────────
-  let _3d = { frames: [], nAz: 12, nEl: 5, azIdx: 0, elIdx: 2, drag: null };
-
-  async function fetch3D() {
-    const status = document.getElementById('view3d-status');
-    const wrap   = document.getElementById('view3d-wrap');
-    const hint   = document.getElementById('view3d-hint');
-    status.textContent = '렌더링 중…';
-    wrap.style.display = 'none';
-    const res = await apiFetch('/api/robot_3d');
-    if (!res.ok) { status.textContent = '렌더링 실패'; return; }
-    const d = await res.json();
-    _3d.frames = d.frames;
-    _3d.nAz    = d.n_az;
-    _3d.nEl    = d.n_el;
-    _3d.azIdx  = 0;
-    _3d.elIdx  = Math.floor(d.n_el / 2);   // 중간 앙각에서 시작
-    hint.style.display = 'none';
-    wrap.style.display = 'inline-block';
-    show3DFrame();
-    status.textContent = `업데이트: ${new Date().toLocaleTimeString()}`;
-  }
-
-  function show3DFrame() {
-    const idx = _3d.elIdx * _3d.nAz + _3d.azIdx;
-    document.getElementById('view3d-img').src = 'data:image/jpeg;base64,' + _3d.frames[idx];
-  }
-
-  (function setup3DDrag() {
-    function onStart(x, y) {
-      _3d.drag = { startX: x, startY: y, startAz: _3d.azIdx, startEl: _3d.elIdx };
-    }
-    function onMove(x, y) {
-      if (!_3d.drag || !_3d.frames.length) return;
-      const dAz = Math.round((x - _3d.drag.startX) / 24);
-      const dEl = Math.round((y - _3d.drag.startY) / 20);
-      _3d.azIdx = ((_3d.drag.startAz - dAz) % _3d.nAz + _3d.nAz) % _3d.nAz;
-      _3d.elIdx = Math.max(0, Math.min(_3d.nEl - 1, _3d.drag.startEl + dEl));
-      show3DFrame();
-    }
-    function onEnd() { _3d.drag = null; }
-
-    const el = document.getElementById('view3d-wrap');
-    el.addEventListener('mousedown',  e => { onStart(e.clientX, e.clientY); el.style.cursor = 'grabbing'; });
-    window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
-    window.addEventListener('mouseup',   () => { onEnd(); el.style.cursor = 'grab'; });
-    el.addEventListener('touchstart', e => onStart(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
-    el.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-    el.addEventListener('touchend',   onEnd);
-  })();
-
   // ── 노트 (localStorage) ───────────────────────────────────────────────────
   function saveNote() {
     localStorage.setItem('heroi_note', document.getElementById('note-box').value);
@@ -533,10 +835,233 @@
     localStorage.removeItem('heroi_note');
   }
 
+  // ── 시뮬레이션 프로세스 모니터 ───────────────────────────────────────────
+  async function fetchSimStatus() {
+    const box   = document.getElementById('sim-proc-list');
+    const badge = document.getElementById('sim-count-badge');
+    const warn  = document.getElementById('sim-warn');
+    const card  = document.getElementById('sim-card');
+    const res = await apiFetch('/api/sim/status');
+    if (!res.ok) {
+      if (res.status !== 401) {
+        badge.textContent = '–';
+        badge.className = 'badge bg-secondary';
+        box.textContent = '컨테이너가 실행 중이 아닙니다.';
+        warn.classList.add('d-none');
+        card.style.borderColor = '';
+      }
+      return;
+    }
+    const d = await res.json();
+    badge.textContent = `${d.count}개 실행 중`;
+    badge.className = 'badge ' + (d.count === 0 ? 'bg-secondary' : d.count === 1 ? 'bg-success' : 'bg-danger');
+    if (d.count > 1) {
+      warn.classList.remove('d-none');
+      card.style.border = '2px solid #dc3545';
+    } else {
+      warn.classList.add('d-none');
+      card.style.border = '';
+    }
+    if (d.count === 0) {
+      box.textContent = '실행 중인 main_test.py 프로세스 없음';
+    } else {
+      box.textContent = d.processes.map(
+        p => `PID ${p.pid.padStart(6)}  경과 ${p.elapsed.padStart(9)}  ${p.cmd}`
+      ).join('\n');
+    }
+  }
+
+  async function killAllSim() {
+    if (!confirm('실행 중인 main_test.py 프로세스를 모두 종료하시겠습니까?')) return;
+    const res = await apiFetch('/api/sim/kill', { method: 'POST' });
+    if (!res.ok && res.status !== 401) return;
+    await fetchSimStatus();
+  }
+
+  async function simRestart() {
+    if (!confirm('main_test.py를 모두 종료하고 새로 시작하시겠습니까?')) return;
+    const badge = document.getElementById('sim-count-badge');
+    badge.textContent = '재시작 중…';
+    badge.className = 'badge bg-warning text-dark';
+    const res = await apiFetch('/api/sim/restart', { method: 'POST' });
+    if (!res.ok && res.status !== 401) {
+      badge.textContent = '실패';
+      badge.className = 'badge bg-danger';
+      return;
+    }
+    setTimeout(fetchSimStatus, 2000);
+  }
+
+  // ── 로봇 현재 상태 ────────────────────────────────────────────────────────
+  const JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow', 'wrist_1', 'wrist_2', 'wrist_3'];
+  let _lastRobotState = null;
+
+  async function fetchRobotState() {
+    const tsEl  = document.getElementById('robot-state-ts');
+    const jBody = document.getElementById('state-joint-body');
+    const eBody = document.getElementById('state-ee-body');
+    let res;
+    try {
+      res = await apiFetch('/api/robot_state');
+    } catch (e) {
+      tsEl.textContent = '네트워크 오류';
+      return;
+    }
+    if (!res.ok) {
+      let detail = `오류 ${res.status}`;
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      const msg = `<tr><td colspan="3" class="text-warning text-center">${detail}</td></tr>`;
+      jBody.innerHTML = msg;
+      eBody.innerHTML = `<tr><td colspan="2" class="text-warning text-center">${detail}</td></tr>`;
+      tsEl.textContent = '';
+      return;
+    }
+    const d = await res.json();
+    _lastRobotState = d;
+    syncSoftLimitsUI(d.soft_limits);
+
+    // 조인트 한계 (robot_state.json 없으면 UR5e 기본값 사용)
+    const limits = d.joint_limits || [
+      [-6.2832, 6.2832], [-6.2832, 6.2832], [-3.1416, 3.1416],
+      [-6.2832, 6.2832], [-6.2832, 6.2832], [-6.2832, 6.2832],
+    ];
+
+    // 조인트 테이블 갱신
+    jBody.innerHTML = d.q.map((v, i) => {
+      const deg   = v * 180 / Math.PI;
+      const lo    = limits[i][0] * 180 / Math.PI;
+      const hi    = limits[i][1] * 180 / Math.PI;
+      const range = hi - lo;
+      const pct   = range > 0 ? Math.max(0, Math.min(100, (deg - lo) / range * 100)) : 50;
+      // 양쪽 한계까지 남은 여유: 0=한계, 50=정중앙
+      const margin  = Math.min(pct, 100 - pct);
+      const barColor = margin < 5  ? '#dc3545'   // 위험 (한계 5% 이내)
+                     : margin < 15 ? '#ffc107'   // 주의
+                     :               '#198754';  // 정상
+      const bgColor  = margin < 5  ? 'rgba(220,53,69,0.08)'
+                     : margin < 15 ? 'rgba(255,193,7,0.08)'
+                     :               '';
+      return `<tr style="background:${bgColor}">
+        <td style="font-family:monospace; font-size:0.8rem">${JOINT_NAMES[i]}</td>
+        <td style="font-family:monospace; font-size:0.8rem; text-align:right">${deg.toFixed(1)}°</td>
+        <td style="vertical-align:middle; padding:4px 8px; min-width:160px">
+          <div style="position:relative; height:14px; background:#e9ecef; border-radius:4px;">
+            <div style="position:absolute; left:${pct.toFixed(1)}%; top:1px; bottom:1px;
+                        width:4px; background:${barColor}; border-radius:2px;
+                        transform:translateX(-50%); transition:left 0.3s;"></div>
+          </div>
+          <div style="display:flex; justify-content:space-between;
+                      font-size:0.65rem; color:#6c757d; margin-top:1px;">
+            <span>${lo.toFixed(0)}°</span><span>${hi.toFixed(0)}°</span>
+          </div>
+        </td>
+        <td style="font-family:monospace; font-size:0.75rem; color:#6c757d; text-align:center">
+          ${lo.toFixed(0)}° ~ ${hi.toFixed(0)}°
+        </td>
+      </tr>`;
+    }).join('');
+
+    // EE 테이블 갱신
+    const [px, py, pz] = d.ee_pos;
+    const [roll, pitch, yaw] = d.ee_euler_deg;
+    eBody.innerHTML = [
+      `<tr><td>X (m)</td><td>${px.toFixed(4)}</td></tr>`,
+      `<tr><td>Y (m)</td><td>${py.toFixed(4)}</td></tr>`,
+      `<tr><td>Z (m)</td><td>${pz.toFixed(4)}</td></tr>`,
+      `<tr><td>Roll (°)</td><td>${roll.toFixed(2)}</td></tr>`,
+      `<tr><td>Pitch (°)</td><td>${pitch.toFixed(2)}</td></tr>`,
+      `<tr><td>Yaw (°)</td><td>${yaw.toFixed(2)}</td></tr>`,
+    ].join('');
+
+    // 타임스탬프
+    const ts = new Date(d.ts * 1000);
+    document.getElementById('robot-state-ts').textContent =
+      `업데이트: ${ts.toLocaleTimeString()}`;
+
+    // 충돌 배너 갱신
+    const banner = document.getElementById('collision-banner');
+    const msgEl  = document.getElementById('collision-msg');
+    if (d.collision && d.collision.detected) {
+      const info = d.collision.info || {};
+      const b1 = info.body1 || '?', b2 = info.body2 || '?';
+      const dist = info.dist != null ? info.dist.toFixed(5) : '?';
+      msgEl.textContent = `⚠ 자기 충돌 감지: ${b1} ↔ ${b2}  (dist=${dist})  — 로봇이 정지 중입니다.`;
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
+  async function resetCollision() {
+    const res = await apiFetch('/api/sim/collision_reset', { method: 'POST' });
+    if (!res.ok && res.status !== 401) {
+      alert('충돌 해제 명령 전송 실패');
+    }
+  }
+
+  // ── 소프트 관절 한계 설정 ────────────────────────────────────────────────
+  async function applySoftLimits() {
+    const badge = document.getElementById('sl-sync-badge');
+    const enabled = document.getElementById('sl-enabled').checked;
+    const margin  = parseFloat(document.getElementById('sl-margin-range').value) / 100;
+    const kp      = parseFloat(document.getElementById('sl-kp').value);
+    const kd      = parseFloat(document.getElementById('sl-kd').value);
+    badge.textContent = '전송 중…';
+    const res = await apiFetch('/api/pub/soft_limits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, margin, kp, kd }),
+    });
+    if (!res.ok && res.status !== 401) { badge.textContent = '전송 실패'; return; }
+    badge.textContent = `적용됨 (${new Date().toLocaleTimeString()})`;
+  }
+
+  // robot_state 폴링 시 소프트 리밋 설정값을 UI에 반영 (처음 1회만)
+  let _slSynced = false;
+  function syncSoftLimitsUI(cfg) {
+    if (_slSynced || !cfg) return;
+    document.getElementById('sl-enabled').checked = cfg.enabled;
+    const pct = Math.round(cfg.margin * 100);
+    document.getElementById('sl-margin-range').value = pct;
+    document.getElementById('sl-margin-val').textContent = pct + '%';
+    document.getElementById('sl-kp').value = cfg.kp;
+    document.getElementById('sl-kd').value = cfg.kd;
+    _slSynced = true;
+  }
+
+  function loadJointFromState() {
+    if (!_lastRobotState) { alert('아직 로봇 상태를 수신하지 못했습니다.'); return; }
+    _lastRobotState.q.forEach((v, i) => {
+      document.getElementById(`joint-slider-${i}`).value = v;
+      document.getElementById(`joint-val-${i}`).value = v.toFixed(4);
+    });
+    document.getElementById('joint-status').textContent =
+      `현재값 불러옴 (${new Date().toLocaleTimeString()})`;
+  }
+
+  function loadEEFromState() {
+    if (!_lastRobotState) { alert('아직 로봇 상태를 수신하지 못했습니다.'); return; }
+    const [px, py, pz]         = _lastRobotState.ee_pos;
+    const [roll, pitch, yaw]   = _lastRobotState.ee_euler_deg;
+    document.getElementById('ee-x').value     = px.toFixed(4);
+    document.getElementById('ee-y').value     = py.toFixed(4);
+    document.getElementById('ee-z').value     = pz.toFixed(4);
+    document.getElementById('ee-roll').value  = roll.toFixed(2);
+    document.getElementById('ee-pitch').value = pitch.toFixed(2);
+    document.getElementById('ee-yaw').value   = yaw.toFixed(2);
+    updateQuat();
+    document.getElementById('ee-status').textContent =
+      `현재값 불러옴 (${new Date().toLocaleTimeString()})`;
+  }
+
   // ── 초기화 ────────────────────────────────────────────────────────────────
   function init() {
     fetchStatus();
+    fetchSimStatus();
+    fetchRobotState();
     setInterval(fetchStatus, 5000);
+    setInterval(fetchSimStatus, 10000);
+    setInterval(fetchRobotState, 1000);
   }
 
   // 노트 복원

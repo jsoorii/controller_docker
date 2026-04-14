@@ -9,19 +9,31 @@ MESHCAT_TUNNEL_LOG="/tmp/heroi-meshcat-tunnel.log"
 PORT=8765
 
 # ── stop 명령 ─────────────────────────────────────────────────────────────────
+_stop_all() {
+    pkill -f "python3 main.py" 2>/dev/null
+    pkill -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null
+    # 재시작 루프(bash -c while true)도 종료
+    pkill -f "while true.*cloudflared" 2>/dev/null
+}
+
 if [ "$1" = "stop" ]; then
     echo "모든 Heroi 프로세스 종료 중..."
-    pkill -f "web_dashboard/main.py" 2>/dev/null
-    pkill -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null
+    _stop_all
     echo "    ✓ 종료 완료 (시뮬레이션은 컨테이너 내에서 별도 종료 필요)"
     exit 0
 fi
 
 # ── 기존 프로세스 정리 ────────────────────────────────────────────────────────
 echo "[1/4] 기존 프로세스 정리 중..."
-pkill -f "web_dashboard/main.py" 2>/dev/null
-pkill -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null
-sleep 0.5
+_stop_all
+
+# 포트가 완전히 해제될 때까지 대기 (최대 10초)
+for i in $(seq 1 20); do
+    if ! ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
+        break
+    fi
+    sleep 0.5
+done
 
 # ── 대시보드 서버 시작 ────────────────────────────────────────────────────────
 echo "[2/4] 대시보드 서버 시작 중..."
@@ -50,12 +62,13 @@ if [ "$1" = "--no-tunnel" ]; then
     echo "[3/4] 터널 생략 (--no-tunnel)"
 else
     echo "[3/4] Cloudflare 터널 시작 중..."
-    nohup cloudflared tunnel --url http://localhost:$PORT > "$TUNNEL_LOG" 2>&1 &
+    > "$TUNNEL_LOG"  # 이전 세션 로그 초기화
+    nohup bash -c "while true; do cloudflared tunnel --url http://localhost:$PORT >> \"$TUNNEL_LOG\" 2>&1; echo '[tunnel] 재연결 중...' >> \"$TUNNEL_LOG\"; sleep 3; done" > /dev/null 2>&1 &
     TUNNEL_PID=$!
 
     # 대시보드 터널 URL 대기 (최대 15초)
     for i in $(seq 1 30); do
-        URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$TUNNEL_LOG" 2>/dev/null | head -1)
+        URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$TUNNEL_LOG" 2>/dev/null | tail -1)
         if [ -n "$URL" ]; then
             echo "    ✓ 터널 연결 완료 (PID: $TUNNEL_PID)"
             echo "    외부 주소 (대시보드): $URL"

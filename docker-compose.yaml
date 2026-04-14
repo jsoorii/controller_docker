@@ -5,7 +5,8 @@ services:
     build: .
     container_name: ur5e_mujoco_ros2
     volumes:
-      - .:/ros2_ws/src/my_ur5e_controller
+      - ./my_ur5e_controller:/ros2_ws/src/my_ur5e_controller
+      - ./web_dashboard:/ros2_ws/src/web_dashboard
     network_mode: host  # 원격 접속의 편의성을 위해 host 모드 권장
     stdin_open: true
     tty: true

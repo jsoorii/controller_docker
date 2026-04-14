@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<!--
+  Minimal kinematic-only URDF for UR5e
+  Based on Universal Robots UR5e DH parameters:
+    d1=0.1625, a2=-0.425, a3=-0.3922, d4=0.1333, d5=0.0997, d6=0.0996
+  All revolute joints rotate about their local z-axis.
+  Joint names match mujoco_menagerie/universal_robots_ur5e/ur5e.xml
+-->
+<robot name="ur5e">
+
+  <!-- ===== Links ===== -->
+  <link name="base_link"/>
+  <link name="shoulder_link"/>
+  <link name="upper_arm_link"/>
+  <link name="forearm_link"/>
+  <link name="wrist_1_link"/>
+  <link name="wrist_2_link"/>
+  <link name="wrist_3_link"/>
+  <link name="tool0"/>
+
+  <!-- ===== Joints ===== -->
+
+  <!-- Joint 1: shoulder pan — lift base_link up by d1, rotate around z -->
+  <joint name="shoulder_pan_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="shoulder_link"/>
+    <origin xyz="0 0 0.1625" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.2831853" upper="6.2831853" effort="150.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Joint 2: shoulder lift — pi/2 roll to align arm along x, rotate around z -->
+  <joint name="shoulder_lift_joint" type="revolute">
+    <parent link="shoulder_link"/>
+    <child link="upper_arm_link"/>
+    <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.2831853" upper="6.2831853" effort="150.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Joint 3: elbow — translate along x by |a2|=0.425, rotate around z -->
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link"/>
+    <child link="forearm_link"/>
+    <origin xyz="-0.425 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.1415926" upper="3.1415926" effort="150.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Joint 4: wrist 1 — translate along x by |a3|=0.3922, up by d4=0.1333, pi/2 roll -->
+  <joint name="wrist_1_joint" type="revolute">
+    <parent link="forearm_link"/>
+    <child link="wrist_1_link"/>
+    <origin xyz="-0.3922 0 0.1333" rpy="1.5707963267948966 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.2831853" upper="6.2831853" effort="28.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Joint 5: wrist 2 — translate along y by d5=0.0997, -pi/2 roll -->
+  <joint name="wrist_2_joint" type="revolute">
+    <parent link="wrist_1_link"/>
+    <child link="wrist_2_link"/>
+    <origin xyz="0 0.0997 0" rpy="-1.5707963267948966 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.2831853" upper="6.2831853" effort="28.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Joint 6: wrist 3 — translate along z by d6=0.0996, pi/2 roll -->
+  <joint name="wrist_3_joint" type="revolute">
+    <parent link="wrist_2_link"/>
+    <child link="wrist_3_link"/>
+    <origin xyz="0 0 0.0996" rpy="1.5707963267948966 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.2831853" upper="6.2831853" effort="28.0" velocity="3.1415926"/>
+  </joint>
+
+  <!-- Fixed: tool0 frame (TCP) -->
+  <joint name="wrist_3-tool0_fixed_joint" type="fixed">
+    <parent link="wrist_3_link"/>
+    <child link="tool0"/>
+    <origin xyz="0 0.0823 0" rpy="-1.5707963267948966 0 0"/>
+  </joint>
+
+</robot>
