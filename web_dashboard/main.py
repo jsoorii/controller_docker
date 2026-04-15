@@ -27,6 +27,11 @@ import time
 
 load_dotenv(Path(__file__).parent / ".env")
 
+# ── 핸드 UI 설정 로드 ─────────────────────────────────────────────────────────
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent))
+from hand_ui_config import ACTIVE as _HAND_CONFIG
+
 COMPOSE_DIR = Path(__file__).parent.parent
 CONTAINER_NAME = "ur5e_mujoco_ros2"
 
@@ -403,6 +408,36 @@ async def pub_soft_limits(body: dict, _: None = Depends(require_auth)):
         f"ros2 topic pub --times 3 --wait-matching-subscriptions 0 "
         f"/ur5e/cmd/soft_limits std_msgs/msg/String "
         f"'{{data: \"{escaped_payload}\"}}' "
+    )
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["/bin/bash", "-c", cmd], stderr=True)
+    return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
+
+
+@app.get("/api/hand_config")
+def hand_config(_: None = Depends(require_auth)):
+    """현재 핸드 UI 설정(hand_ui_config.py의 ACTIVE)을 JSON으로 반환한다."""
+    return _HAND_CONFIG
+
+
+@app.post("/api/pub/hand")
+async def pub_hand(body: dict, _: None = Depends(require_auth)):
+    """핸드 설정에 정의된 ROS topic으로 값을 발행한다.
+    body: {topic, msg_type, msg_field, value}"""
+    topic    = body.get("topic", "").strip()
+    msg_type = body.get("msg_type", "").strip()
+    field    = body.get("msg_field", "data")
+    value    = body.get("value", 0.0)
+
+    if not topic or not msg_type:
+        raise HTTPException(status_code=400, detail="topic and msg_type are required")
+
+    cmd = (
+        f"source /opt/ros/humble/setup.bash && "
+        f"ros2 topic pub --times 3 --wait-matching-subscriptions 0 "
+        f"{topic} {msg_type} '{{  {field}: {float(value)}  }}'"
     )
     container = get_container()
     if container is None or container.status != "running":

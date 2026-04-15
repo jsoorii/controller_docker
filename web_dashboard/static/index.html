@@ -266,6 +266,9 @@
     </div>
   </div>
 
+  <!-- 핸드 제어 (hand_ui_config.py에서 동적으로 렌더링) -->
+  <div id="hand-card-container"></div>
+
   <!-- 로봇 제어 (탭) -->
   <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center"
@@ -1040,6 +1043,132 @@
     }
   }
 
+  // ── 핸드 제어 ─────────────────────────────────────────────────────────────
+  let _handCfg      = null;
+  let _handDebounce = {};
+  let _handPresets  = {};  // key: "gi_pi" → {ctrlId: value, ...}
+
+  async function loadHandConfig() {
+    try {
+      const res = await apiFetch('/api/hand_config');
+      if (!res.ok) return;
+      _handCfg = await res.json();
+      renderHandCard(_handCfg);
+    } catch (e) {
+      console.warn('hand_config 로드 실패:', e);
+    }
+  }
+
+  function renderHandCard(cfg) {
+    const container = document.getElementById('hand-card-container');
+    if (!container || !cfg.enabled) return;
+
+    _handPresets = {};
+    let groupsHtml = '';
+
+    cfg.groups.forEach((group, gi) => {
+      let controlsHtml = '';
+      group.controls.forEach(ctrl => {
+        if (ctrl.type === 'slider') {
+          controlsHtml += `
+            <div class="mb-2">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label small fw-bold mb-0">${ctrl.label}</label>
+                <span class="text-muted" style="font-size:0.75rem;">${ctrl.unit || ''}</span>
+                <span id="hand-val-${ctrl.id}" class="badge bg-secondary"
+                      style="font-family:monospace; font-size:0.8rem; min-width:3em;">${ctrl.default.toFixed(2)}</span>
+              </div>
+              <input type="range" class="form-range" id="hand-ctrl-${ctrl.id}"
+                     min="${ctrl.min}" max="${ctrl.max}" step="${ctrl.step}" value="${ctrl.default}"
+                     oninput="onHandSlider('${ctrl.id}', parseFloat(this.value))" />
+            </div>`;
+        }
+      });
+
+      let presetsHtml = '';
+      if (group.presets && group.presets.length) {
+        let btns = '';
+        group.presets.forEach((preset, pi) => {
+          const key = `${gi}_${pi}`;
+          _handPresets[key] = preset.values;
+          btns += `<button class="btn btn-sm btn-outline-primary" onclick="applyHandPreset('${key}')">${preset.label}</button>`;
+        });
+        presetsHtml = `<div class="d-flex gap-2 flex-wrap mb-3">${btns}</div>`;
+      }
+
+      if (gi > 0) groupsHtml += '<hr class="my-2">';
+      groupsHtml += `
+        <div>
+          <div class="small text-muted fw-bold mb-2">${group.label}</div>
+          ${presetsHtml}
+          ${controlsHtml}
+        </div>`;
+    });
+
+    container.innerHTML = `
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center"
+             style="cursor:pointer;" onclick="toggleCard('hand-body')">
+          <div>
+            핸드 제어
+            <span class="badge bg-secondary ms-2 fw-normal" style="font-size:0.75rem;">${cfg.name}</span>
+          </div>
+          <span id="hand-chevron">▲</span>
+        </div>
+        <div id="hand-body" class="card-body">
+          ${groupsHtml}
+          <div id="hand-status" class="text-muted small mt-1"></div>
+        </div>
+      </div>`;
+  }
+
+  function onHandSlider(ctrlId, value) {
+    const valEl = document.getElementById(`hand-val-${ctrlId}`);
+    if (valEl) valEl.textContent = value.toFixed(2);
+    clearTimeout(_handDebounce[ctrlId]);
+    _handDebounce[ctrlId] = setTimeout(() => sendHandCtrl(ctrlId, value), 150);
+  }
+
+  async function sendHandCtrl(ctrlId, value) {
+    if (!_handCfg) return;
+    let ctrl = null;
+    for (const group of _handCfg.groups) {
+      ctrl = group.controls.find(c => c.id === ctrlId);
+      if (ctrl) break;
+    }
+    if (!ctrl) return;
+
+    const res = await apiFetch('/api/pub/hand', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic:     ctrl.topic,
+        msg_type:  ctrl.msg_type,
+        msg_field: ctrl.msg_field || 'data',
+        value:     value,
+      }),
+    });
+    const statusEl = document.getElementById('hand-status');
+    if (!res.ok) {
+      if (statusEl) statusEl.textContent = `✗ 전송 실패 (${res.status})`;
+      return;
+    }
+    const d = await res.json();
+    if (statusEl)
+      statusEl.textContent = d.ok
+        ? `✓ ${ctrl.label}: ${value.toFixed(2)}`
+        : `✗ ${(d.output || '').slice(0, 80)}`;
+  }
+
+  function applyHandPreset(key) {
+    const values = _handPresets[key];
+    if (!values) return;
+    for (const [id, val] of Object.entries(values)) {
+      const el = document.getElementById(`hand-ctrl-${id}`);
+      if (el) { el.value = val; onHandSlider(id, val); }
+    }
+  }
+
   // ── 소프트 관절 한계 설정 ────────────────────────────────────────────────
   async function applySoftLimits() {
     const badge = document.getElementById('sl-sync-badge');
@@ -1100,6 +1229,7 @@
     fetchStatus();
     fetchSimStatus();
     fetchRobotState();
+    loadHandConfig();
     setInterval(fetchStatus, 5000);
     setInterval(fetchSimStatus, 10000);
     setInterval(fetchRobotState, 1000);

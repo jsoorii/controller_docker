@@ -4,6 +4,7 @@
 |------|-------------|-----------------|
 | 2026-04-15 | Created orca_hand/ folder with README.md, bom.csv, ORCA_v1.step (40MB), 5 STL ZIPs, 9 Bambu 3MF files collected from orcahand.com. | `8ce53ae` |
 | 2026-04-15 | Cloned orcahand_description repo into orca_hand/; updated README with DOF detail, actuator ranges, v1/v2 version comparison. | `8ce53ae` |
+| 2026-04-15 | 웹 UI에 핸드 제어 카드 추가. hand_ui_config.py로 핸드별 설정 외부화, /api/hand_config + /api/pub/hand 엔드포인트 추가. | `09d39f9` |
 | 2026-04-07 | Added ROS2 pub/sub interface to main_test.py for real-time UR5e command sending. | `92001ff` |
 | 2026-04-08 | Moved AUTH_USERNAME/AUTH_PASSWORD from hardcoded values to .env file in web_dashboard. | `3a494c1` |
 | 2026-04-08 | Fixed JS auth for API calls: added apiFetch() wrapper and replaced EventSource with fetch+ReadableStream for log streaming. | `3a494c1` |
