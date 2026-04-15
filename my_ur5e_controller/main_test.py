@@ -6,50 +6,34 @@ import time
 import threading
 import sys
 import os
-import xml.etree.ElementTree as ET
 
-# 우리가 만든 RT 제어기 클래스 임포트
+import gripper_config
+import scene_config
 from ur5e_rt_controller import UR5eRTController, ControlState
+
+UR5E_SCENE = "/ros2_ws/src/mujoco_menagerie/universal_robots_ur5e/scene.xml"
 
 
 def load_scene_model():
-    """ur5e.xml 옆에 임시 scene 파일을 생성해 로드한다.
-    같은 디렉토리에 있어야 meshdir='assets' 경로가 올바르게 해석된다."""
-    base_xml = "/ros2_ws/src/mujoco_menagerie/universal_robots_ur5e/scene.xml"
-    tmp_path = "/ros2_ws/src/mujoco_menagerie/universal_robots_ur5e/_scene_tmp.xml"
+    """MjSpec으로 UR5e scene + 그리퍼를 합쳐 로드한다."""
+    spec = mujoco.MjSpec.from_file(UR5E_SCENE)
 
-    tree = ET.parse(base_xml)
-    root = tree.getroot()
+    # ── 그리퍼: gripper_config.ACTIVE 기준으로 부착 ────────────────────────
+    gripper_config.attach(spec)
 
-    worldbody = root.find('worldbody')
+    # ── 환경 오브젝트: scene_config.OBJECTS 기준으로 추가 ──────────────────
+    scene_config.add_objects(spec)
 
-    # 정육면체: 각변 30cm, 로봇 베이스 x축 방향 30cm
-    box = ET.SubElement(worldbody, 'body', {'name': 'box', 'pos': '0.3 0 0.15'})
-    ET.SubElement(box, 'geom', {
-        'name': 'box_geom', 'type': 'box',
-        'size': '0.15 0.15 0.15', 'rgba': '0.8 0.35 0.1 1'
-    })
-
-    # 관절 토크 센서 (actuatorfrc): 6개 액추에이터 각각
-    sensor_el = root.find('sensor')
-    if sensor_el is None:
-        sensor_el = ET.SubElement(root, 'sensor')
+    # ── 관절 토크 센서 (arm 6축) ───────────────────────────────────────────
     for act_name in ('shoulder_pan', 'shoulder_lift', 'elbow',
                      'wrist_1', 'wrist_2', 'wrist_3'):
-        ET.SubElement(sensor_el, 'actuatorfrc', {
-            'name': f'torque_{act_name}',
-            'actuator': act_name,
-        })
+        s          = spec.add_sensor()
+        s.name     = f'torque_{act_name}'
+        s.type     = mujoco.mjtSensor.mjSENS_ACTUATORFRC
+        s.objtype  = mujoco.mjtObj.mjOBJ_ACTUATOR
+        s.objname  = act_name
 
-    tree.write(tmp_path, encoding='unicode')
-    try:
-        model = mujoco.MjModel.from_xml_path(tmp_path)
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-    return model
+    return spec.compile()
 
 # geom의 실효 RGBA 반환: alpha==0이면 material 색상을 우선 사용
 def get_geom_rgba(model, i):
@@ -146,7 +130,7 @@ def main():
     setup_meshcat_robot(model, vis)
 
     # --- 제어기 객체 생성 및 스레드 실행 ---
-    controller = UR5eRTController(model, data)
+    controller = UR5eRTController(model, data, gripper_cfg=gripper_config.ACTIVE)
     controller.start_ros_node()
     ctrl_thread = threading.Thread(target=controller.start, daemon=True)
     ctrl_thread.start()

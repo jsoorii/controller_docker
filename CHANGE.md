@@ -2,6 +2,8 @@
 
 | Date | Description | Rollback Commit |
 |------|-------------|-----------------|
+| 2026-04-15 | Created orca_hand/ folder with README.md, bom.csv, ORCA_v1.step (40MB), 5 STL ZIPs, 9 Bambu 3MF files collected from orcahand.com. | `8ce53ae` |
+| 2026-04-15 | Cloned orcahand_description repo into orca_hand/; updated README with DOF detail, actuator ranges, v1/v2 version comparison. | `8ce53ae` |
 | 2026-04-07 | Added ROS2 pub/sub interface to main_test.py for real-time UR5e command sending. | `92001ff` |
 | 2026-04-08 | Moved AUTH_USERNAME/AUTH_PASSWORD from hardcoded values to .env file in web_dashboard. | `3a494c1` |
 | 2026-04-08 | Fixed JS auth for API calls: added apiFetch() wrapper and replaced EventSource with fetch+ReadableStream for log streaming. | `3a494c1` |
@@ -45,6 +47,7 @@
 | 2026-04-14 | Added vel_start/vel_end to EE command: encoded in header.frame_id ("base|v0|v1"), parsed in _cb_ee_target, normalized to v_norm=v*duration/dist; added _smooth_alpha_blend(tau,v0,v1) general quintic; updated /api/pub/ee and dashboard UI. | `3fccc24` |
 | 2026-04-14 | Added kinematic limits to UR5eRTController (ee_max_vel, ee_max_acc, ee_max_jerk constructor params); _compute_min_duration() uses bisection over 201-point numerical profile to find minimum duration satisfying all constraints; _cb_ee_target enforces T >= T_min with log on extension. | `3fccc24` |
 | 2026-04-14 | Implemented continuous blending in _cb_ee_target: when a new EE command arrives mid-motion, current profile velocity is computed (f'(τ)×Δpos/T), projected onto new direction, and used as vel_start for the new profile — ensures velocity-continuous handoff. | `3fccc24` |
+| 2026-04-15 | Added horizontal scroll wrapper to joint state table for mobile; added always-visible collision reset button to robot control card header. | `8ce53ae` |
 | 2026-04-14 | Fixed velocity spike at blend point: added ensure_decel flag to _compute_min_duration; when blending, enforces T ≥ 10·dist/(6·v0+4·v1) so v0_norm ≥ 5/3, guaranteeing f'''(0)≤0 (immediate deceleration, no initial speedup). | `3fccc24` |
 | 2026-04-14 | Added self-collision detection: COLLISION_STOP state added to ControlState; after mj_step() checks data.contact for robot link pairs (both body_id>0) with dist<0; on detection freezes joints and prints collision body names; reset_collision() clears state and returns to INIT_POSITION. | `3fccc24` |
 | 2026-04-14 | Added collision reset button: collision state written to robot_state.json; /ur5e/cmd/collision_reset ROS2 topic triggers reset_collision(); /api/sim/collision_reset backend endpoint; sticky red banner with body names and dist shown in dashboard when collision detected; "충돌 정지 해제" button calls the endpoint. | `3fccc24` |
@@ -64,3 +67,12 @@
 | 2026-04-15 | Updated README.md: reflected current architecture (sensor system, scene objects, safety features, updated API table, updated TODO). | `3fccc24` |
 | 2026-04-15 | Added docs/grasp_controller_flow.md: grasp controller control flow diagram including state machine transitions, RUN_CONTROL loop steps, kinematics pipeline, threading/data flow, and timing summary. | `74cd735` |
 | 2026-04-15 | Added docs/project_structure.md: project directory structure from Notion 제어기 설계 (2024-05-26) — comm, control/core/kinematics/linkage/math/util, core, drivers layers. | `74cd735` |
+| 2026-04-15 | Extended collision detection to include robot-object collisions: added _build_robot_body_ids() to cache robot kinematic chain; _check_collision() now reports both self_collision (robot↔robot) and object_collision (robot↔external) types. | `74cd735` |
+| 2026-04-15 | Fixed false-positive collision: _build_robot_body_ids() now stores _robot_base_body_id; _check_collision() skips only base_link↔floor(world body=0) contacts, not all world-body contacts. | `74cd735` |
+| 2026-04-15 | Fixed collision state not written to file: moved _write_state() counter from controller_run() to main start() loop so state file updates in all states including COLLISION_STOP. | `74cd735` |
+| 2026-04-15 | Added COLLISION_ESCAPE state: on collision reset, retreats to joint config from 0.1s before collision (50-step safe_q_buffer); PD-controls to that position until collision clears, then resumes RUN_CONTROL. | `74cd735` |
+| 2026-04-15 | Merged 컨테이너 상태+도커 제어 cards into one; added toggleCard() collapse/expand to all cards (컨테이너, 시뮬레이션, 명령 실행, 로봇 제어, 소프트 관절 한계, 스트리밍, 로봇 현재 상태) with ▲/▼ chevron. | `8ce53ae` |
+| 2026-04-15 | Reordered dashboard cards: 스트리밍 명령 moved below 명령 실행; 소프트 관절 한계 moved above 로봇 제어. | `8ce53ae` |
+| 2026-04-15 | Attached Robotiq 2F-85 v4 gripper to UR5e: load_scene_model() rewritten with MjSpec.attach(site='attachment_site'); added _gripper_act_id, set_gripper(), _cb_gripper(/ur5e/cmd/gripper Float64 0~1), gripper state to robot_state.json. | `8ce53ae` |
+| 2026-04-15 | Extracted gripper_config.py: GripperConfig dataclass + presets (ROBOTIQ_2F85_V4, ROBOTIQ_2F85, UMI_GRIPPER) + attach(); gripper swap = change ACTIVE in gripper_config.py only; main_test.py and ur5e_rt_controller.py untouched. | `8ce53ae` |
+| 2026-04-15 | Extracted scene_config.py: Box/Sphere/Cylinder dataclasses + OBJECTS list + add_objects(); scene objects = edit OBJECTS in scene_config.py only; main_test.py untouched. | `8ce53ae` |

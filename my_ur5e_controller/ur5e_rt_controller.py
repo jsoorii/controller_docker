@@ -7,12 +7,13 @@ import mujoco
 from enum import Enum
 
 class ControlState(Enum):
-    WAIT_STABLE     = 0
-    INIT_CONTROL    = 1
-    CHECK_MOTOR     = 2
-    INIT_POSITION   = 3
-    RUN_CONTROL     = 4
-    COLLISION_STOP  = 5
+    WAIT_STABLE       = 0
+    INIT_CONTROL      = 1
+    CHECK_MOTOR       = 2
+    INIT_POSITION     = 3
+    RUN_CONTROL       = 4
+    COLLISION_STOP    = 5
+    COLLISION_ESCAPE  = 6
 
 
 def _quat_to_rotmat(x, y, z, w) -> np.ndarray:
@@ -28,7 +29,8 @@ class UR5eRTController:
     def __init__(self, model, data, ee_body_name="wrist_3_link",
                  ee_max_vel: float = 1.0,    # EE 최대 선속도 (m/s)
                  ee_max_acc: float = 5.0,    # EE 최대 가속도 (m/s²)
-                 ee_max_jerk: float = 50.0): # EE 최대 저크   (m/s³)
+                 ee_max_jerk: float = 50.0,  # EE 최대 저크   (m/s³)
+                 gripper_cfg=None):  # GripperConfig | None
         self.model = model
         self.data = data
         self.state = ControlState.WAIT_STABLE
@@ -103,6 +105,25 @@ class UR5eRTController:
         self.collision_detected: bool = False
         self.collision_info: dict = {}
         self._freeze_q: np.ndarray = np.zeros(6)
+        self._robot_body_ids: set = self._build_robot_body_ids()
+
+        # 충돌 직전 안전 위치 버퍼 (50스텝 = 0.1s @ 500Hz)
+        self._safe_q_buf_size: int = 50
+        self._safe_q_buffer: list = []
+        self._escape_target_q: np.ndarray = np.zeros(6)
+
+        # Gripper: GripperConfig 객체로 설정, 없으면 비활성
+        if gripper_cfg is not None:
+            _act_name = f"gripper/{gripper_cfg.actuator}"
+            self._gripper_act_id:     int   = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_ACTUATOR, _act_name)
+            self._gripper_ctrl_open:  float = float(gripper_cfg.ctrl_open)
+            self._gripper_ctrl_close: float = float(gripper_cfg.ctrl_close)
+        else:
+            self._gripper_act_id     = -1
+            self._gripper_ctrl_open  = 0.0
+            self._gripper_ctrl_close = 1.0
+        self._gripper_ctrl: float = self._gripper_ctrl_open  # 시작 시 열림
 
         # ROS2 state
         self.ros_cmd_active: bool = False   # True after any external ROS2 command
@@ -177,6 +198,13 @@ class UR5eRTController:
                 "collision": {
                     "detected": self.collision_detected,
                     "info":     self.collision_info,
+                },
+                "gripper": {
+                    "ctrl": self._gripper_ctrl,
+                    "open_ratio": round(1.0 - (
+                        (self._gripper_ctrl - self._gripper_ctrl_open) /
+                        (self._gripper_ctrl_close - self._gripper_ctrl_open + 1e-9)
+                    ), 3),
                 },
                 "joint_limits": self.model.jnt_range[:6].tolist(),
                 "soft_limits": {
@@ -436,6 +464,10 @@ class UR5eRTController:
             StringMsg, "/ur5e/cmd/soft_limits",
             self._cb_soft_limits, 10
         )
+        self._ros_node.create_subscription(
+            Float64, "/ur5e/cmd/gripper",
+            self._cb_gripper, 10
+        )
 
         t = threading.Thread(target=rclpy.spin, args=(self._ros_node,), daemon=True)
         t.start()
@@ -599,6 +631,11 @@ class UR5eRTController:
         if changed:
             print(f"\n[Controller] 소프트 리밋 갱신: {', '.join(changed)}")
 
+    def _cb_gripper(self, msg):
+        """std_msgs/Float64 → 그리퍼 개폐 (0.0=열림, 1.0=닫힘)"""
+        self.set_gripper(msg.data)
+        print(f"\n[ROS2] 그리퍼: {msg.data:.2f} (ctrl={self._gripper_ctrl:.0f})")
+
     # ------------------------------------------------------------------
     # Soft joint limits
     # ------------------------------------------------------------------
@@ -639,38 +676,72 @@ class UR5eRTController:
     # Collision detection
     # ------------------------------------------------------------------
 
+    def _build_robot_body_ids(self) -> set:
+        """EE에서 루트까지 부모 링크를 역추적해 로봇 링크 body ID 집합을 반환한다.
+        부산물로 self._robot_base_body_id (체인 최상단 링크 id)를 저장한다."""
+        ids = set()
+        bid = self.ee_body_id
+        last = bid
+        while bid > 0:
+            ids.add(bid)
+            last = bid
+            bid = int(self.model.body_parentid[bid])
+        self._robot_base_body_id: int = last  # world(0)에 직접 연결된 베이스 링크
+        return ids
+
     def _check_collision(self) -> bool:
-        """mj_step() 이후 활성 접촉을 검사해 자기 충돌을 감지한다.
+        """mj_step() 이후 활성 접촉을 검사해 충돌을 감지한다.
 
         판정 기준:
-          - 두 geom 모두 world body(body_id 0)가 아닌 로봇 링크에 속함
+          - 접촉하는 두 geom 중 하나 이상이 로봇 링크에 속함
           - contact.dist < 0 (실제 침투 발생, 단순 근접 접촉 제외)
 
-        mujoco_menagerie UR5e XML 은 인접 링크 간 contact exclusion 이
-        이미 설정되어 있으므로 보고되는 접촉은 비인접 링크 충돌이다.
+        충돌 유형:
+          - self_collision  : 두 geom 모두 로봇 링크
+          - object_collision: 로봇 링크 ↔ 외부 물체(바닥, 동적 오브젝트 등)
         """
         for i in range(self.data.ncon):
             c = self.data.contact[i]
-            b1 = self.model.geom_bodyid[c.geom1]
-            b2 = self.model.geom_bodyid[c.geom2]
-            if b1 > 0 and b2 > 0 and c.dist < 0.0:
-                n1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b1) or f"body{b1}"
-                n2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b2) or f"body{b2}"
-                self.collision_info = {
-                    "type": "self_collision",
-                    "body1": n1,
-                    "body2": n2,
-                    "dist": round(float(c.dist), 5),
-                    "pos":  [round(float(v), 4) for v in c.pos],
-                }
-                return True
+            if c.dist >= 0.0:
+                continue
+            b1 = int(self.model.geom_bodyid[c.geom1])
+            b2 = int(self.model.geom_bodyid[c.geom2])
+            # 베이스링크↔바닥(world body=0) 접촉만 무시 (정상 마운트 접촉)
+            base = self._robot_base_body_id
+            if (b1 == 0 and b2 == base) or (b2 == 0 and b1 == base):
+                continue
+            in_robot1 = b1 in self._robot_body_ids
+            in_robot2 = b2 in self._robot_body_ids
+            if not (in_robot1 or in_robot2):
+                continue
+            n1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b1) or f"body{b1}"
+            n2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b2) or f"body{b2}"
+            self.collision_info = {
+                "type": "self_collision" if (in_robot1 and in_robot2) else "object_collision",
+                "body1": n1,
+                "body2": n2,
+                "dist": round(float(c.dist), 5),
+                "pos":  [round(float(v), 4) for v in c.pos],
+            }
+            return True
         return False
 
+    def set_gripper(self, value: float):
+        """그리퍼 개폐 명령. value: 0.0=완전 열림, 1.0=완전 닫힘"""
+        t = float(np.clip(value, 0.0, 1.0))
+        self._gripper_ctrl = self._gripper_ctrl_open + t * (
+            self._gripper_ctrl_close - self._gripper_ctrl_open
+        )
+
     def reset_collision(self):
-        """충돌 정지 상태를 해제하고 INIT_POSITION 으로 복귀한다."""
-        self.collision_detected = False
-        self.collision_info = {}
-        # 모션 명령도 모두 초기화
+        """충돌 정지 해제: 충돌 직전 안전 위치로 후퇴 후 정상 제어로 복귀한다."""
+        # 버퍼에 안전 위치가 있으면 가장 오래된 것(충돌 ~0.1s 전)으로 후퇴
+        if self._safe_q_buffer:
+            self._escape_target_q = self._safe_q_buffer[0].copy()
+        else:
+            self._escape_target_q = self._freeze_q.copy()
+
+        # 모션 명령 초기화
         self._ik_cmd_duration = 0.0
         self._ik_v0_norm = 0.0
         self._ik_v1_norm = 0.0
@@ -678,8 +749,9 @@ class UR5eRTController:
             self._traj_points = []
         self.task_cmd["use_task_space"] = False
         self.ros_cmd_active = False
-        self.state = ControlState.INIT_POSITION
-        print("\n[Controller] 충돌 정지 해제 → INIT_POSITION")
+        self.state = ControlState.COLLISION_ESCAPE
+        print("\n[Controller] 충돌 정지 해제 → COLLISION_ESCAPE"
+              f"  target_q={np.round(np.degrees(self._escape_target_q), 1)}")
 
     # ------------------------------------------------------------------
     # Real-time control loop
@@ -714,11 +786,9 @@ class UR5eRTController:
 
         self.data.ctrl[:6] = tau_out
 
-        # 10 Hz로 상태 파일 갱신
-        self._state_write_counter += 1
-        if self._state_write_counter >= 50:
-            self._state_write_counter = 0
-            self._write_state()
+        # 그리퍼 제어 (actuator index 6, 범위 0~255)
+        if self._gripper_act_id >= 0:
+            self.data.ctrl[self._gripper_act_id] = self._gripper_ctrl
 
     def start(self):
         print(f"\n[Controller] 시작 - 현재 상태: {self.state.name}")
@@ -744,6 +814,11 @@ class UR5eRTController:
                 self.state = ControlState.RUN_CONTROL
 
             elif self.state == ControlState.RUN_CONTROL:
+                # 안전 위치 버퍼 갱신 (충돌 감지 전 위치 기록)
+                self._safe_q_buffer.append(self.data.qpos[:6].copy())
+                if len(self._safe_q_buffer) > self._safe_q_buf_size:
+                    self._safe_q_buffer.pop(0)
+
                 self.controller_run()
                 mujoco.mj_step(self.model, self.data)
                 if self._check_collision():
@@ -764,6 +839,31 @@ class UR5eRTController:
                     + self.data.qfrc_bias[:6]
                 )
                 mujoco.mj_step(self.model, self.data)
+
+            elif self.state == ControlState.COLLISION_ESCAPE:
+                # 충돌 직전 안전 위치로 PD 제어하며 후퇴
+                q_cur  = self.data.qpos[:6]
+                dq_cur = self.data.qvel[:6]
+                self.data.ctrl[:6] = (
+                    self.kp * (self._escape_target_q - q_cur)
+                    + self.kd * (0.0 - dq_cur)
+                    + self.data.qfrc_bias[:6]
+                )
+                mujoco.mj_step(self.model, self.data)
+                # 충돌이 해제되면 정상 제어로 복귀
+                if not self._check_collision():
+                    self.collision_detected = False
+                    self.collision_info = {}
+                    self.motor_cmd["q_target"] = self._escape_target_q.copy()
+                    self._safe_q_buffer.clear()
+                    self.state = ControlState.RUN_CONTROL
+                    print("\n[Controller] 충돌 해제 완료 → RUN_CONTROL")
+
+            # 10 Hz로 상태 파일 갱신 (모든 상태에서 실행)
+            self._state_write_counter += 1
+            if self._state_write_counter >= 50:
+                self._state_write_counter = 0
+                self._write_state()
 
             t_elapsed = time.perf_counter() - t_start
             t_sleep = self.dt - t_elapsed

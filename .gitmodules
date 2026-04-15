@@ -1,0 +1,3 @@
+[submodule "orca_hand/orcahand_description"]
+	path = orca_hand/orcahand_description
+	url = https://github.com/orcahand/orcahand_description.git
