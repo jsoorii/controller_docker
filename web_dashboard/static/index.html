@@ -1044,9 +1044,8 @@
   }
 
   // ── 핸드 제어 ─────────────────────────────────────────────────────────────
-  let _handCfg      = null;
-  let _handDebounce = {};
-  let _handPresets  = {};  // key: "gi_pi" → {ctrlId: value, ...}
+  let _handCfg     = null;
+  let _handPresets = {};   // key: "gi_pi" → {ctrlId: value, ...}
 
   async function loadHandConfig() {
     try {
@@ -1091,7 +1090,7 @@
         group.presets.forEach((preset, pi) => {
           const key = `${gi}_${pi}`;
           _handPresets[key] = preset.values;
-          btns += `<button class="btn btn-sm btn-outline-primary" onclick="applyHandPreset('${key}')">${preset.label}</button>`;
+          btns += `<button class="btn btn-sm btn-outline-secondary" onclick="applyHandPreset('${key}')">${preset.label}</button>`;
         });
         presetsHtml = `<div class="d-flex gap-2 flex-wrap mb-3">${btns}</div>`;
       }
@@ -1102,6 +1101,7 @@
           <div class="small text-muted fw-bold mb-2">${group.label}</div>
           ${presetsHtml}
           ${controlsHtml}
+          <button class="btn btn-success btn-sm mt-1" onclick="sendHandGroup(${gi})">전송</button>
         </div>`;
     });
 
@@ -1117,49 +1117,55 @@
         </div>
         <div id="hand-body" class="card-body">
           ${groupsHtml}
-          <div id="hand-status" class="text-muted small mt-1"></div>
+          <div id="hand-status" class="text-muted small mt-2"></div>
         </div>
       </div>`;
   }
 
+  // 슬라이더 드래그 → 값 표시만 갱신 (전송 안 함)
   function onHandSlider(ctrlId, value) {
     const valEl = document.getElementById(`hand-val-${ctrlId}`);
     if (valEl) valEl.textContent = value.toFixed(2);
-    clearTimeout(_handDebounce[ctrlId]);
-    _handDebounce[ctrlId] = setTimeout(() => sendHandCtrl(ctrlId, value), 150);
   }
 
-  async function sendHandCtrl(ctrlId, value) {
+  // 그룹 내 모든 control 값을 한 번에 전송
+  async function sendHandGroup(gi) {
     if (!_handCfg) return;
-    let ctrl = null;
-    for (const group of _handCfg.groups) {
-      ctrl = group.controls.find(c => c.id === ctrlId);
-      if (ctrl) break;
-    }
-    if (!ctrl) return;
+    const group = _handCfg.groups[gi];
+    if (!group) return;
 
-    const res = await apiFetch('/api/pub/hand', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        topic:     ctrl.topic,
-        msg_type:  ctrl.msg_type,
-        msg_field: ctrl.msg_field || 'data',
-        value:     value,
-      }),
-    });
     const statusEl = document.getElementById('hand-status');
-    if (!res.ok) {
-      if (statusEl) statusEl.textContent = `✗ 전송 실패 (${res.status})`;
-      return;
+    if (statusEl) statusEl.textContent = '전송 중…';
+
+    let allOk = true;
+    const sent = [];
+    for (const ctrl of group.controls) {
+      const el = document.getElementById(`hand-ctrl-${ctrl.id}`);
+      if (!el) continue;
+      const value = parseFloat(el.value);
+      const res = await apiFetch('/api/pub/hand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic:     ctrl.topic,
+          msg_type:  ctrl.msg_type,
+          msg_field: ctrl.msg_field || 'data',
+          value:     value,
+        }),
+      });
+      if (!res.ok) { allOk = false; continue; }
+      const d = await res.json();
+      if (d.ok) sent.push(`${ctrl.label}: ${value.toFixed(2)}`);
+      else allOk = false;
     }
-    const d = await res.json();
+
     if (statusEl)
-      statusEl.textContent = d.ok
-        ? `✓ ${ctrl.label}: ${value.toFixed(2)}`
-        : `✗ ${(d.output || '').slice(0, 80)}`;
+      statusEl.textContent = allOk
+        ? `✓ 전송 완료 — ${sent.join(', ')}`
+        : `✗ 일부 전송 실패`;
   }
 
+  // 프리셋 버튼 → 슬라이더 값 설정 + 해당 그룹 즉시 전송
   function applyHandPreset(key) {
     const values = _handPresets[key];
     if (!values) return;
@@ -1167,6 +1173,8 @@
       const el = document.getElementById(`hand-ctrl-${id}`);
       if (el) { el.value = val; onHandSlider(id, val); }
     }
+    const gi = parseInt(key.split('_')[0]);
+    sendHandGroup(gi);
   }
 
   // ── 소프트 관절 한계 설정 ────────────────────────────────────────────────
