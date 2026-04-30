@@ -10,6 +10,8 @@ import os
 import gripper_config
 import scene_config
 from ur5e_rt_controller import UR5eRTController, ControlState
+from robotiq_grasp_adapter import RobotiqGraspAdapter
+from object_approach_node import ObjectApproachNode
 
 UR5E_SCENE = "/ros2_ws/src/mujoco_menagerie/universal_robots_ur5e/scene.xml"
 
@@ -121,7 +123,17 @@ def main():
     # --- Meshcat 초기화 ---
     vis = meshcat.Visualizer()
     print(f"\n🌐 Meshcat 접속 주소: {vis.url()}")
-    vis.delete() # 기존 잔상 제거
+    vis.delete()  # 기존 잔상 제거
+
+    # 현재 MeshCat 포트를 파일로 기록 (대시보드 포트 탐지용)
+    try:
+        import re as _re
+        _m = _re.search(r":(\d+)/", vis.url())
+        if _m:
+            with open("/tmp/meshcat_port.txt", "w") as _f:
+                _f.write(_m.group(1))
+    except Exception:
+        pass
 
     # 초기 geom_xpos / geom_xmat 계산 (이 없으면 초기 위치가 전부 0)
     mujoco.mj_forward(model, data)
@@ -134,6 +146,14 @@ def main():
     controller.start_ros_node()
     ctrl_thread = threading.Thread(target=controller.start, daemon=True)
     ctrl_thread.start()
+
+    # --- Anti-Slip 반사 제어 (GraspController 기반) ---
+    grasp_adapter = RobotiqGraspAdapter(model, data, controller)
+    grasp_adapter.start_thread()
+
+    # --- 물체 접근 노드 ---
+    approach_node = ObjectApproachNode(model, data)
+    approach_node.start_thread()
 
     # --- 메인 루프 (시각화 및 모니터링) ---
     print("\n🚀 제어 및 시각화 루프 가동 중...")

@@ -15,6 +15,7 @@ preset: 버튼 클릭 시 해당 group의 모든 control 값을 설정하고 즉
 ROBOTIQ_2F85 = {
     "name": "Robotiq 2F-85",
     "enabled": True,
+    "weight_estimation": True,   # 무게 추정 섹션 표시 여부
     "groups": [
         {
             "label": "그리퍼",
@@ -30,6 +31,16 @@ ROBOTIQ_2F85 = {
                     "default":  0.0,
                     "topic":    "/ur5e/cmd/gripper",
                     "msg_type": "std_msgs/msg/Float64",
+                    "msg_field":"data",
+                },
+                {
+                    "id":       "antislip",
+                    "label":    "Anti-Slip Reflex",
+                    "unit":     "슬립 감지 시 자동으로 파지력 증가",
+                    "type":     "toggle",
+                    "default":  True,
+                    "topic":    "/ur5e/cmd/antislip",
+                    "msg_type": "std_msgs/msg/Bool",
                     "msg_field":"data",
                 },
             ],

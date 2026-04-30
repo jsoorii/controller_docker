@@ -90,182 +90,6 @@
 <div class="container py-4">
   <h3 class="mb-4">🤖 Heroi Docker Dashboard</h3>
 
-  <!-- 컨테이너 상태 + 도커 제어 (통합, 접기/펼치기) -->
-  <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center"
-         style="cursor:pointer;" onclick="toggleCard('docker-body')">
-      <div class="d-flex align-items-center gap-3">
-        컨테이너
-        <span id="status-badge" class="badge badge-unknown px-2 py-1">확인 중…</span>
-        <span id="status-detail" class="text-muted fw-normal" style="font-size:0.82rem;"></span>
-      </div>
-      <span id="docker-chevron">▲</span>
-    </div>
-    <div id="docker-body">
-      <div class="card-body d-flex gap-2 flex-wrap">
-        <button class="btn btn-success" onclick="action('start')">▶ 시작</button>
-        <button class="btn btn-danger"  onclick="action('stop')">■ 중지</button>
-        <button class="btn btn-warning" onclick="action('restart')">↺ 재시작</button>
-        <button class="btn btn-dark"    onclick="startRebuild()">🔨 재빌드 후 재시작</button>
-        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="event.stopPropagation();fetchStatus()">새로고침</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 재빌드 출력 -->
-  <div class="card mb-3" id="rebuild-card" style="display:none;">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      재빌드 출력
-      <button class="btn btn-sm btn-outline-secondary" onclick="clearRebuild()">지우기</button>
-    </div>
-    <div class="card-body p-2">
-      <div id="rebuild-output" style="
-        font-family: monospace; font-size: 0.8rem;
-        background: #212529; color: #a8ff78;
-        border-radius: 6px; padding: 10px;
-        height: 300px; overflow-y: auto;
-        white-space: pre-wrap; word-break: break-all;">
-      </div>
-    </div>
-  </div>
-
-  <!-- 시뮬레이션 프로세스 모니터 -->
-  <div class="card mb-3" id="sim-card">
-    <div class="card-header d-flex justify-content-between align-items-center"
-         style="cursor:pointer;" onclick="toggleCard('sim-body')">
-      <div class="d-flex align-items-center gap-2">
-        시뮬레이션
-        <span id="sim-count-badge" class="badge bg-secondary">확인 중…</span>
-      </div>
-      <div class="d-flex gap-2 align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();fetchSimStatus()">🔄</button>
-        <button class="btn btn-sm btn-danger"  onclick="event.stopPropagation();killAllSim()">⏹ 종료</button>
-        <button class="btn btn-sm btn-success" onclick="event.stopPropagation();simRestart()">▶ 재시작</button>
-        <span id="sim-chevron">▲</span>
-      </div>
-    </div>
-    <div id="sim-body">
-      <div id="sim-warn" class="alert alert-danger d-none m-2 mb-0 py-2 px-3" style="font-size:0.85rem;">
-        ⚠ main_test.py 프로세스가 여러 개 실행 중입니다. 중복 제어가 발생할 수 있습니다.
-      </div>
-      <div class="card-body p-2">
-        <div id="sim-proc-list" style="
-          font-family: monospace; font-size: 0.8rem;
-          background: #212529; color: #a8ff78;
-          border-radius: 6px; padding: 10px;
-          min-height: 48px; white-space: pre-wrap; word-break: break-all;">
-          데이터 없음
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 명령 실행 -->
-  <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center"
-         style="cursor:pointer;" onclick="toggleCard('cmd-body')">
-      컨테이너 내 명령 실행
-      <span id="cmd-chevron">▲</span>
-    </div>
-    <div id="cmd-body">
-      <div class="card-body">
-        <div class="input-group mb-2">
-          <input id="cmd-input" type="text" class="form-control"
-                 placeholder="예: ros2 topic list"
-                 onkeydown="if(event.key==='Enter') execCmd()" />
-          <button class="btn btn-primary" onclick="execCmd()">실행</button>
-          <button class="btn btn-secondary" onclick="execBg()" title="백그라운드 실행 (결과 없음, /tmp/bg.log에 저장)">BG</button>
-        </div>
-        <div class="d-flex justify-content-end mb-1">
-          <button class="btn btn-sm btn-outline-secondary" onclick="copyCmdOutput()">복사</button>
-        </div>
-        <div id="cmd-output">결과가 여기 표시됩니다.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 스트리밍 명령 -->
-  <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center"
-         style="cursor:pointer;" onclick="toggleCard('stream-body')">
-      스트리밍 명령
-      <div class="d-flex gap-2 align-items-center">
-        <div onclick="event.stopPropagation()" class="d-flex gap-2">
-          <button class="btn btn-sm btn-primary" onclick="startStream()">시작</button>
-          <button class="btn btn-sm btn-danger" onclick="stopStream()">중지</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="clearStream()">지우기</button>
-        </div>
-        <span id="stream-chevron">▲</span>
-      </div>
-    </div>
-    <div id="stream-body" class="card-body">
-      <div class="input-group mb-2">
-        <input id="stream-input" type="text" class="form-control"
-               placeholder="예: ros2 topic echo /ur5e/state/joint"
-               onkeydown="if(event.key==='Enter') startStream()" />
-      </div>
-      <div id="stream-output" style="
-        background:#212529; color:#a8ff78; font-family:monospace;
-        font-size:0.8rem; min-height:120px; max-height:400px;
-        overflow-y:auto; padding:10px; border-radius:6px;
-        white-space:pre-wrap; word-break:break-all;">
-      </div>
-    </div>
-  </div>
-
-  <!-- 소프트 관절 한계 설정 -->
-  <div class="card mb-3">
-    <div class="card-header d-flex justify-content-between align-items-center"
-         style="cursor:pointer;" onclick="toggleCard('sl-body')">
-      소프트 관절 한계 (속도 감속)
-      <div class="d-flex gap-2 align-items-center">
-        <span id="sl-sync-badge" class="text-muted small"></span>
-        <span id="sl-chevron">▲</span>
-      </div>
-    </div>
-    <div id="sl-body" class="card-body">
-      <div class="row g-3 align-items-end">
-        <div class="col-auto d-flex align-items-center gap-2">
-          <div class="form-check form-switch mb-0">
-            <input class="form-check-input" type="checkbox" id="sl-enabled" checked
-                   style="width:2.5em; height:1.3em; cursor:pointer;" />
-            <label class="form-check-label small fw-bold" for="sl-enabled">활성화</label>
-          </div>
-        </div>
-        <div class="col">
-          <label class="form-label small mb-1">
-            여유 구간
-            <span class="text-muted">(한계 안쪽 %)</span>
-          </label>
-          <div class="d-flex align-items-center gap-2">
-            <input type="range" class="form-range" id="sl-margin-range"
-                   min="0" max="40" step="1" value="5"
-                   oninput="document.getElementById('sl-margin-val').textContent=this.value+'%'"
-                   style="flex:1" />
-            <span id="sl-margin-val" style="width:3em; text-align:right; font-family:monospace; font-size:0.9rem;">5%</span>
-          </div>
-        </div>
-        <div class="col-auto">
-          <label class="form-label small mb-1">반발 강성 kp</label>
-          <input type="number" id="sl-kp" class="form-control form-control-sm"
-                 value="200" min="0" max="2000" step="10" style="width:90px" />
-        </div>
-        <div class="col-auto">
-          <label class="form-label small mb-1">감쇠 kd</label>
-          <input type="number" id="sl-kd" class="form-control form-control-sm"
-                 value="20" min="0" max="200" step="1" style="width:80px" />
-        </div>
-        <div class="col-auto">
-          <button class="btn btn-primary btn-sm" onclick="applySoftLimits()">적용</button>
-        </div>
-      </div>
-      <div class="mt-2" style="font-size:0.8rem; color:#6c757d;">
-        여유 구간: 관절 범위 양 끝에서 설정값% 이내 진입 시 반발 토크 + 속도 감쇠 적용.
-        <br>예) 5% → shoulder_pan(±360°) 기준 양끝 18° 이내에서 감속 시작.
-      </div>
-    </div>
-  </div>
-
   <!-- 핸드 제어 (hand_ui_config.py에서 동적으로 렌더링) -->
   <div id="hand-card-container"></div>
 
@@ -276,7 +100,7 @@
       로봇 제어
       <div class="d-flex gap-2 align-items-center">
         <div onclick="event.stopPropagation()" class="d-flex gap-2 align-items-center">
-          <button class="btn btn-sm btn-danger fw-bold" onclick="resetCollision()">⚠ 충돌 정지 해제</button>
+          <button id="collision-reset-btn" class="btn btn-sm btn-danger fw-bold" onclick="resetCollision()" disabled>⚠ 충돌 정지 해제</button>
           <span id="mode-badge" class="badge bg-secondary">–</span>
         </div>
         <span id="ctrl-chevron">▲</span>
@@ -441,8 +265,61 @@
     </div>
   </div>
 
+  <!-- 소프트 관절 한계 설정 (기본 접힘) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="cursor:pointer;" onclick="toggleCard('sl-body')">
+      소프트 관절 한계 (속도 감속)
+      <div class="d-flex gap-2 align-items-center">
+        <span id="sl-sync-badge" class="text-muted small"></span>
+        <span id="sl-chevron">▼</span>
+      </div>
+    </div>
+    <div id="sl-body" class="card-body" style="display:none;">
+      <div class="row g-3 align-items-end">
+        <div class="col-auto d-flex align-items-center gap-2">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="sl-enabled" checked
+                   style="width:2.5em; height:1.3em; cursor:pointer;" />
+            <label class="form-check-label small fw-bold" for="sl-enabled">활성화</label>
+          </div>
+        </div>
+        <div class="col">
+          <label class="form-label small mb-1">
+            여유 구간
+            <span class="text-muted">(한계 안쪽 %)</span>
+          </label>
+          <div class="d-flex align-items-center gap-2">
+            <input type="range" class="form-range" id="sl-margin-range"
+                   min="0" max="40" step="1" value="5"
+                   oninput="document.getElementById('sl-margin-val').textContent=this.value+'%'"
+                   style="flex:1" />
+            <span id="sl-margin-val" style="width:3em; text-align:right; font-family:monospace; font-size:0.9rem;">5%</span>
+          </div>
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">반발 강성 kp</label>
+          <input type="number" id="sl-kp" class="form-control form-control-sm"
+                 value="200" min="0" max="2000" step="10" style="width:90px" />
+        </div>
+        <div class="col-auto">
+          <label class="form-label small mb-1">감쇠 kd</label>
+          <input type="number" id="sl-kd" class="form-control form-control-sm"
+                 value="20" min="0" max="200" step="1" style="width:80px" />
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-primary btn-sm" onclick="applySoftLimits()">적용</button>
+        </div>
+      </div>
+      <div class="mt-2" style="font-size:0.8rem; color:#6c757d;">
+        여유 구간: 관절 범위 양 끝에서 설정값% 이내 진입 시 반발 토크 + 속도 감쇠 적용.
+        <br>예) 5% → shoulder_pan(±360°) 기준 양끝 18° 이내에서 감속 시작.
+      </div>
+    </div>
+  </div>
+
   <!-- 실시간 로그 -->
-  <div class="card">
+  <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
       컨트롤러 로그 (/tmp/bg.log)
       <div class="d-flex gap-2">
@@ -458,11 +335,158 @@
       </div>
     </div>
   </div>
+
+  <!-- 컨테이너 상태 + 도커 제어 (기본 접힘) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="cursor:pointer;" onclick="toggleCard('docker-body')">
+      <div class="d-flex align-items-center gap-3">
+        컨테이너
+        <span id="status-badge" class="badge badge-unknown px-2 py-1">확인 중…</span>
+        <span id="status-detail" class="text-muted fw-normal" style="font-size:0.82rem;"></span>
+      </div>
+      <span id="docker-chevron">▼</span>
+    </div>
+    <div id="docker-body" style="display:none;">
+      <div class="card-body d-flex gap-2 flex-wrap">
+        <button class="btn btn-success" onclick="action('start')">▶ 시작</button>
+        <button class="btn btn-danger"  onclick="action('stop')">■ 중지</button>
+        <button class="btn btn-warning" onclick="action('restart')">↺ 재시작</button>
+        <button class="btn btn-dark"    onclick="startRebuild()">🔨 재빌드 후 재시작</button>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="event.stopPropagation();fetchStatus()">새로고침</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 재빌드 출력 -->
+  <div class="card mb-3" id="rebuild-card" style="display:none;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      재빌드 출력
+      <button class="btn btn-sm btn-outline-secondary" onclick="clearRebuild()">지우기</button>
+    </div>
+    <div class="card-body p-2">
+      <div id="rebuild-output" style="
+        font-family: monospace; font-size: 0.8rem;
+        background: #212529; color: #a8ff78;
+        border-radius: 6px; padding: 10px;
+        height: 300px; overflow-y: auto;
+        white-space: pre-wrap; word-break: break-all;">
+      </div>
+    </div>
+  </div>
+
+  <!-- 시뮬레이션 프로세스 모니터 (기본 접힘) -->
+  <div class="card mb-3" id="sim-card">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="cursor:pointer;" onclick="toggleCard('sim-body')">
+      <div class="d-flex align-items-center gap-2">
+        시뮬레이션
+        <span id="sim-count-badge" class="badge bg-secondary">확인 중…</span>
+        <span id="sim-error-badge" class="badge bg-danger d-none">⚠ 에러</span>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();fetchSimStatus()">🔄</button>
+        <button class="btn btn-sm btn-danger"  onclick="event.stopPropagation();killAllSim()">⏹ 종료</button>
+        <button class="btn btn-sm btn-success" onclick="event.stopPropagation();simRestart()">▶ 재시작</button>
+        <span id="sim-chevron">▼</span>
+      </div>
+    </div>
+    <div id="sim-body" style="display:none;">
+      <div id="sim-warn" class="alert alert-danger d-none m-2 mb-0 py-2 px-3" style="font-size:0.85rem;">
+        ⚠ main_test.py 프로세스가 여러 개 실행 중입니다. 중복 제어가 발생할 수 있습니다.
+      </div>
+      <div class="card-body p-2">
+        <small class="text-muted fw-bold d-block mb-1">프로세스</small>
+        <div id="sim-proc-list" style="
+          font-family: monospace; font-size: 0.8rem;
+          background: #212529; color: #a8ff78;
+          border-radius: 6px; padding: 10px;
+          min-height: 48px; white-space: pre-wrap; word-break: break-all;">
+          데이터 없음
+        </div>
+
+        <!-- 에러 로그 영역 -->
+        <div class="d-flex align-items-center justify-content-between mt-3 mb-1">
+          <small class="text-muted fw-bold">로그 (bg.log · 에러 강조)</small>
+          <button class="btn btn-outline-secondary"
+                  style="font-size:0.7rem; padding:1px 8px; line-height:1.6;"
+                  onclick="clearSimErrorDisplay()">지우기</button>
+        </div>
+        <div id="sim-error-log" style="
+          font-family: monospace; font-size: 0.78rem;
+          background: #1a1a2e; color: #c9d1d9;
+          border-radius: 6px; padding: 10px;
+          min-height: 48px; max-height: 220px; overflow-y: auto;
+          white-space: pre-wrap; word-break: break-all;">
+          대기 중…
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 컨테이너 내 명령 실행 (기본 접힘) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="cursor:pointer;" onclick="toggleCard('cmd-body')">
+      컨테이너 내 명령 실행
+      <span id="cmd-chevron">▼</span>
+    </div>
+    <div id="cmd-body" style="display:none;">
+      <div class="card-body">
+        <div class="input-group mb-2">
+          <input id="cmd-input" type="text" class="form-control"
+                 placeholder="예: ros2 topic list"
+                 onkeydown="if(event.key==='Enter') execCmd()" />
+          <button class="btn btn-primary" onclick="execCmd()">실행</button>
+          <button class="btn btn-secondary" onclick="execBg()" title="백그라운드 실행 (결과 없음, /tmp/bg.log에 저장)">BG</button>
+        </div>
+        <div class="d-flex justify-content-end mb-1">
+          <button class="btn btn-sm btn-outline-secondary" onclick="copyCmdOutput()">복사</button>
+        </div>
+        <div id="cmd-output">결과가 여기 표시됩니다.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 스트리밍 명령 (기본 접힘) -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="cursor:pointer;" onclick="toggleCard('stream-body')">
+      스트리밍 명령
+      <div class="d-flex gap-2 align-items-center">
+        <div onclick="event.stopPropagation()" class="d-flex gap-2">
+          <button class="btn btn-sm btn-primary" onclick="startStream()">시작</button>
+          <button class="btn btn-sm btn-danger" onclick="stopStream()">중지</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="clearStream()">지우기</button>
+        </div>
+        <span id="stream-chevron">▼</span>
+      </div>
+    </div>
+    <div id="stream-body" class="card-body" style="display:none;">
+      <div class="input-group mb-2">
+        <input id="stream-input" type="text" class="form-control"
+               placeholder="예: ros2 topic echo /ur5e/state/joint"
+               onkeydown="if(event.key==='Enter') startStream()" />
+      </div>
+      <div id="stream-output" style="
+        background:#212529; color:#a8ff78; font-family:monospace;
+        font-size:0.8rem; min-height:120px; max-height:400px;
+        overflow-y:auto; padding:10px; border-radius:6px;
+        white-space:pre-wrap; word-break:break-all;">
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
   // ── 접기/펼치기 ───────────────────────────────────────────────────────────
-  const _collapsed = {};
+  const _collapsed = {
+    'docker-body': true,
+    'sim-body':    true,
+    'cmd-body':    true,
+    'stream-body': true,
+    'sl-body':     true,
+  };
   function toggleCard(bodyId) {
     const body = document.getElementById(bodyId);
     const chevronId = bodyId.replace('-body', '-chevron');
@@ -915,6 +939,57 @@
     }
   }
 
+  // ── 시뮬레이션 에러 로그 ─────────────────────────────────────────────────
+  const _ERR_KW = ["Traceback", "Exception", "Error", "error:", "❌", "Warning"];
+
+  function _colorLine(line) {
+    const isErr = _ERR_KW.some(k => line.includes(k));
+    const span = document.createElement('span');
+    span.textContent = line + '\n';
+    span.style.color = isErr ? '#ff6b6b' : '#c9d1d9';
+    if (isErr) span.style.fontWeight = '600';
+    return span;
+  }
+
+  let _simErrorCleared = false;
+
+  async function fetchSimErrors() {
+    const logEl   = document.getElementById('sim-error-log');
+    const badgeEl = document.getElementById('sim-error-badge');
+    if (!logEl) return;
+
+    let res;
+    try { res = await apiFetch('/api/sim/errors'); } catch { return; }
+    if (!res.ok) return;
+    const d = await res.json();
+
+    // 에러 배지 (카드 접힘 상태에서도 보임)
+    if (badgeEl) {
+      badgeEl.classList.toggle('d-none', !d.has_error);
+    }
+
+    if (_simErrorCleared) return;  // 사용자가 지운 뒤에는 갱신 안 함
+
+    if (!d.lines || d.lines.length === 0) {
+      logEl.textContent = '로그 없음';
+      return;
+    }
+
+    logEl.textContent = '';
+    d.lines.forEach(line => logEl.appendChild(_colorLine(line)));
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function clearSimErrorDisplay() {
+    const logEl = document.getElementById('sim-error-log');
+    const badgeEl = document.getElementById('sim-error-badge');
+    if (logEl) logEl.textContent = '(지움)';
+    if (badgeEl) badgeEl.classList.add('d-none');
+    _simErrorCleared = true;
+    // 재시작 시 자동 재활성화
+    setTimeout(() => { _simErrorCleared = false; }, 30000);
+  }
+
   async function killAllSim() {
     if (!confirm('실행 중인 main_test.py 프로세스를 모두 종료하시겠습니까?')) return;
     const res = await apiFetch('/api/sim/kill', { method: 'POST' });
@@ -924,6 +999,7 @@
 
   async function simRestart() {
     if (!confirm('main_test.py를 모두 종료하고 새로 시작하시겠습니까?')) return;
+    _simErrorCleared = false;  // 재시작 시 에러 표시 재활성화
     const badge = document.getElementById('sim-count-badge');
     badge.textContent = '재시작 중…';
     badge.className = 'badge bg-warning text-dark';
@@ -933,7 +1009,7 @@
       badge.className = 'badge bg-danger';
       return;
     }
-    setTimeout(fetchSimStatus, 2000);
+    setTimeout(() => { fetchSimStatus(); fetchSimErrors(); }, 3000);
   }
 
   // ── 로봇 현재 상태 ────────────────────────────────────────────────────────
@@ -1022,10 +1098,12 @@
     document.getElementById('robot-state-ts').textContent =
       `업데이트: ${ts.toLocaleTimeString()}`;
 
-    // 충돌 배너 갱신
-    const banner = document.getElementById('collision-banner');
-    const msgEl  = document.getElementById('collision-msg');
-    if (d.collision && d.collision.detected) {
+    // 충돌 배너 및 해제 버튼 갱신
+    const banner   = document.getElementById('collision-banner');
+    const msgEl    = document.getElementById('collision-msg');
+    const resetBtn = document.getElementById('collision-reset-btn');
+    const detected = !!(d.collision && d.collision.detected);
+    if (detected) {
       const info = d.collision.info || {};
       const b1 = info.body1 || '?', b2 = info.body2 || '?';
       const dist = info.dist != null ? info.dist.toFixed(5) : '?';
@@ -1034,6 +1112,7 @@
     } else {
       banner.style.display = 'none';
     }
+    if (resetBtn) resetBtn.disabled = !detected;
   }
 
   async function resetCollision() {
@@ -1081,6 +1160,30 @@
                      min="${ctrl.min}" max="${ctrl.max}" step="${ctrl.step}" value="${ctrl.default}"
                      oninput="onHandSlider('${ctrl.id}', parseFloat(this.value))" />
             </div>`;
+        } else if (ctrl.type === 'toggle') {
+          const onColor  = '#198754';
+          const offColor = '#6c757d';
+          controlsHtml += `
+            <div class="d-flex align-items-center justify-content-between mt-3 mb-1 px-3 py-2 rounded"
+                 style="background:#f8f9fa; border:1px solid #dee2e6;">
+              <div>
+                <div class="small fw-bold">⚡ ${ctrl.label}</div>
+                <div class="text-muted" style="font-size:0.73rem;">${ctrl.unit || ''}</div>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span id="hand-toggle-label-${ctrl.id}" class="small fw-bold"
+                      style="color:${ctrl.default ? onColor : offColor}; min-width:2.2em; text-align:right;">
+                  ${ctrl.default ? 'ON' : 'OFF'}
+                </span>
+                <div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" id="hand-ctrl-${ctrl.id}"
+                         role="switch" style="width:2.5em; height:1.3em; cursor:pointer;"
+                         ${ctrl.default ? 'checked' : ''}
+                         onchange="onHandToggle('${ctrl.id}', this.checked,
+                           '${ctrl.topic}', '${ctrl.msg_type}', '${ctrl.msg_field || 'data'}')"/>
+                </div>
+              </div>
+            </div>`;
         }
       });
 
@@ -1105,6 +1208,34 @@
         </div>`;
     });
 
+    // 무게 추정 섹션 (weight_estimation: true 인 경우만)
+    const weightSectionHtml = cfg.weight_estimation ? `
+      <hr class="my-3"/>
+      <div id="weight-section">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="small fw-bold">⚖ 무게 추정</span>
+          <span class="text-muted" style="font-size:0.72rem;">반사 기반 · 정적 파지 가정</span>
+          <span id="weight-confidence-badge" class="badge bg-secondary ms-auto" style="font-size:0.7rem;">대기 중</span>
+        </div>
+        <div class="d-flex align-items-end gap-3 flex-wrap">
+          <div>
+            <div style="font-size:1.7rem; font-weight:700; font-family:monospace; line-height:1.1;"
+                 id="weight-mass-display">– g</div>
+            <div class="text-muted" style="font-size:0.72rem;">
+              ±<span id="weight-std-display">–</span> g
+              &nbsp;·&nbsp; <span id="weight-samples-display">0</span>샘플
+            </div>
+          </div>
+          <div style="font-size:0.78rem; color:#6c757d; line-height:1.6;">
+            <div>F_n: <span id="weight-fn-display" style="font-family:monospace;">– N</span></div>
+            <div>μ_eff: <span id="weight-mu-display" style="font-family:monospace;">–</span></div>
+          </div>
+        </div>
+        <div class="text-muted mt-1" style="font-size:0.7rem;">
+          m ≈ Σ(F_contact · ẑ) / g &nbsp;·&nbsp; 이동 중이면 오차 증가
+        </div>
+      </div>` : '';
+
     container.innerHTML = `
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center"
@@ -1117,6 +1248,19 @@
         </div>
         <div id="hand-body" class="card-body">
           ${groupsHtml}
+          <div class="d-flex align-items-center gap-2 mt-2 mb-1">
+            <button id="regrasp-btn" class="btn btn-outline-warning btn-sm"
+                    onclick="regraspToggle()">▶ ReGrasp Reflex 실행</button>
+            <span id="regrasp-badge" class="badge bg-secondary">중지됨</span>
+          </div>
+          ${weightSectionHtml}
+          <hr class="my-3"/>
+          <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-outline-primary btn-sm" onclick="publishObjectPosition()">
+              📍 물체 위치 발행
+            </button>
+            <span id="obj-pos-status" class="text-muted small"></span>
+          </div>
           <div id="hand-status" class="text-muted small mt-2"></div>
         </div>
       </div>`;
@@ -1126,6 +1270,80 @@
   function onHandSlider(ctrlId, value) {
     const valEl = document.getElementById(`hand-val-${ctrlId}`);
     if (valEl) valEl.textContent = value.toFixed(2);
+  }
+
+  // ── ReGrasp Reflex 토글 ──────────────────────────────────────────────
+  async function regraspToggle() {
+    const badge    = document.getElementById('regrasp-badge');
+    const btn      = document.getElementById('regrasp-btn');
+    const statusEl = document.getElementById('hand-status');
+    if (!badge || !btn) return;
+    const running = badge.textContent.trim() === '실행 중';
+    const enable  = !running;
+    btn.disabled = true;
+    try {
+      const res = await apiFetch('/api/pub/regrasp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: enable }),
+      });
+      if (!res.ok && res.status !== 401) {
+        let detail = `API 오류 (${res.status})`;
+        try { detail = (await res.json()).detail || detail; } catch (_) {}
+        badge.className  = 'badge bg-danger';
+        badge.textContent = '오류';
+        if (statusEl) statusEl.textContent = `ReGrasp 전송 실패: ${detail}`;
+        return;
+      }
+      const d = await res.json();
+      if (!d.ok) {
+        badge.className  = 'badge bg-danger';
+        badge.textContent = '오류';
+        if (statusEl) statusEl.textContent = `ReGrasp 명령 실패: ${d.output || ''}`;
+        return;
+      }
+      badge.className  = enable ? 'badge bg-success' : 'badge bg-secondary';
+      badge.textContent = enable ? '실행 중 (조건 대기)' : '중지됨';
+      btn.textContent   = enable ? '■ ReGrasp Reflex 중지' : '▶ ReGrasp Reflex 실행';
+      if (statusEl) statusEl.textContent = enable
+        ? 'ReGrasp ON — 비대칭 파지 감지 시 자동 발동'
+        : 'ReGrasp OFF';
+    } catch (e) {
+      badge.className  = 'badge bg-danger';
+      badge.textContent = '오류';
+      if (statusEl) statusEl.textContent = `네트워크 오류: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // 토글 변경 → 즉시 ROS 토픽 발행
+  async function onHandToggle(ctrlId, enabled, topic, msgType, msgField) {
+    const labelEl  = document.getElementById(`hand-toggle-label-${ctrlId}`);
+    const statusEl = document.getElementById('hand-status');
+    if (labelEl) {
+      labelEl.textContent = enabled ? 'ON' : 'OFF';
+      labelEl.style.color = enabled ? '#198754' : '#6c757d';
+    }
+    if (statusEl) statusEl.textContent = `${ctrlId} 전송 중…`;
+    const res = await apiFetch('/api/pub/hand', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic, msg_type: msgType, msg_field: msgField,
+        value: enabled, value_type: 'bool',
+      }),
+    });
+    if (!res.ok && res.status !== 401) {
+      if (statusEl) statusEl.textContent = `전송 실패`;
+      return;
+    }
+    const d = await res.json();
+    if (statusEl) {
+      statusEl.textContent = d.ok
+        ? `Anti-Slip Reflex ${enabled ? '🟢 ON' : '⚫ OFF'}`
+        : `오류: ${d.output}`;
+    }
   }
 
   // 그룹 내 모든 control 값을 한 번에 전송
@@ -1140,6 +1358,7 @@
     let allOk = true;
     const sent = [];
     for (const ctrl of group.controls) {
+      if (ctrl.type === 'toggle') continue;  // 토글은 변경 시 즉시 전송 — 전송 버튼 제외
       const el = document.getElementById(`hand-ctrl-${ctrl.id}`);
       if (!el) continue;
       const value = parseFloat(el.value);
@@ -1175,6 +1394,22 @@
     }
     const gi = parseInt(key.split('_')[0]);
     sendHandGroup(gi);
+  }
+
+  // ── 물체 위치 발행 ────────────────────────────────────────────────────────
+  async function publishObjectPosition() {
+    const statusEl = document.getElementById('obj-pos-status');
+    if (statusEl) statusEl.textContent = '발행 중…';
+    const res = await apiFetch('/api/pub/object_position', { method: 'POST' });
+    if (!res.ok && res.status !== 401) {
+      if (statusEl) statusEl.textContent = '전송 실패';
+      return;
+    }
+    const d = await res.json();
+    if (statusEl)
+      statusEl.textContent = d.ok
+        ? `✓ /mujoco/scene_objects 발행 완료 (${new Date().toLocaleTimeString()})`
+        : `오류: ${d.output}`;
   }
 
   // ── 소프트 관절 한계 설정 ────────────────────────────────────────────────
@@ -1232,15 +1467,76 @@
       `현재값 불러옴 (${new Date().toLocaleTimeString()})`;
   }
 
+  // ── 무게 추정 상태 폴링 ───────────────────────────────────────────────────
+  async function fetchGraspState() {
+    // weight-section이 렌더링되지 않았으면 스킵
+    if (!document.getElementById('weight-mass-display')) return;
+
+    let d;
+    try {
+      const res = await apiFetch('/api/grasp_state');
+      if (!res.ok) return;
+      d = await res.json();
+    } catch (e) { return; }
+
+    const w = d.weight || {};
+    const f = d.friction || {};
+
+    const massG   = w.mass_kg != null ? (w.mass_kg * 1000).toFixed(1) : '–';
+    const stdG    = w.std_kg  != null ? (w.std_kg  * 1000).toFixed(1) : '–';
+    const samples = w.n_samples ?? 0;
+    const conf    = w.confidence || 'low';
+    const inContact = w.n_contact > 0;
+
+    // 큰 숫자 표시
+    const massEl = document.getElementById('weight-mass-display');
+    if (massEl) {
+      massEl.textContent = inContact ? `${massG} g` : '– g';
+      massEl.style.color = inContact
+        ? (conf === 'high' ? '#198754' : conf === 'medium' ? '#fd7e14' : '#6c757d')
+        : '#adb5bd';
+    }
+    const stdEl = document.getElementById('weight-std-display');
+    if (stdEl) stdEl.textContent = inContact ? stdG : '–';
+    const samEl = document.getElementById('weight-samples-display');
+    if (samEl) samEl.textContent = samples;
+
+    // 신뢰도 배지
+    const badgeEl = document.getElementById('weight-confidence-badge');
+    if (badgeEl) {
+      const confMap = {
+        high:   ['bg-success', '🟢 신뢰도 높음'],
+        medium: ['bg-warning text-dark', '🟡 신뢰도 중간'],
+        low:    ['bg-secondary',          '⚫ 샘플 부족'],
+      };
+      const [cls, label] = confMap[conf] || confMap.low;
+      badgeEl.className = `badge ${cls} ms-auto`;
+      badgeEl.textContent = inContact ? label : '미접촉';
+    }
+
+    // 마찰 / 법선력
+    const fnEl = document.getElementById('weight-fn-display');
+    if (fnEl && f.F_normal && f.F_normal.length) {
+      fnEl.textContent = f.F_normal.map(v => v.toFixed(1)).join(' / ') + ' N';
+    }
+    const muEl = document.getElementById('weight-mu-display');
+    if (muEl && f.mu_eff && f.mu_eff.length) {
+      muEl.textContent = f.mu_eff.map(v => v.toFixed(2)).join(' / ');
+    }
+  }
+
   // ── 초기화 ────────────────────────────────────────────────────────────────
   function init() {
     fetchStatus();
     fetchSimStatus();
+    fetchSimErrors();
     fetchRobotState();
     loadHandConfig();
     setInterval(fetchStatus, 5000);
     setInterval(fetchSimStatus, 10000);
+    setInterval(fetchSimErrors, 5000);
     setInterval(fetchRobotState, 1000);
+    setInterval(fetchGraspState, 500);
   }
 
   // 노트 복원

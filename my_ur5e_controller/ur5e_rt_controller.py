@@ -34,6 +34,7 @@ class UR5eRTController:
         self.model = model
         self.data = data
         self.state = ControlState.WAIT_STABLE
+        self.regrasp_enabled = False
 
         # Resolve end-effector body ID
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, ee_body_name)
@@ -129,6 +130,9 @@ class UR5eRTController:
         self.ros_cmd_active: bool = False   # True after any external ROS2 command
         self._ros_ee_duration: float = 0.0  # pending duration from /ur5e/cmd/ee_duration
         self._ros_node = None
+
+        # Anti-Slip Reflex 활성화 플래그 (RobotiqGraspAdapter에서 참조)
+        self.antislip_enabled: bool = True
 
     # ------------------------------------------------------------------
     # Motion profile helpers
@@ -468,8 +472,19 @@ class UR5eRTController:
             Float64, "/ur5e/cmd/gripper",
             self._cb_gripper, 10
         )
+        self._ros_node.create_subscription(
+            Bool, "/ur5e/cmd/antislip",
+            self._cb_antislip, 10
+        )
+        self._ros_node.create_subscription(
+            Bool, "/ur5e/cmd/regrasp",
+            self._cb_regrasp, 10
+        )
 
-        t = threading.Thread(target=rclpy.spin, args=(self._ros_node,), daemon=True)
+        from rclpy.executors import SingleThreadedExecutor
+        _executor = SingleThreadedExecutor()
+        _executor.add_node(self._ros_node)
+        t = threading.Thread(target=_executor.spin, daemon=True)
         t.start()
         print("[Controller] ROS2 노드 시작 완료")
 
@@ -635,6 +650,18 @@ class UR5eRTController:
         """std_msgs/Float64 → 그리퍼 개폐 (0.0=열림, 1.0=닫힘)"""
         self.set_gripper(msg.data)
         print(f"\n[ROS2] 그리퍼: {msg.data:.2f} (ctrl={self._gripper_ctrl:.0f})")
+
+    def _cb_antislip(self, msg):
+        """std_msgs/Bool → Anti-Slip Reflex 활성화/비활성화"""
+        self.antislip_enabled = bool(msg.data)
+        state = "ON" if self.antislip_enabled else "OFF"
+        print(f"\n[ROS2] Anti-Slip Reflex: {state}")
+
+    def _cb_regrasp(self, msg):
+        """std_msgs/Bool → ReGrasp Reflex 활성화/비활성화"""
+        self.regrasp_enabled = bool(msg.data)
+        state = "ON" if self.regrasp_enabled else "OFF"
+        print(f"\n[ROS2] ReGrasp Reflex: {state}")
 
     # ------------------------------------------------------------------
     # Soft joint limits

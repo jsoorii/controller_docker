@@ -11,9 +11,7 @@ PORT=8765
 # ── stop 명령 ─────────────────────────────────────────────────────────────────
 _stop_all() {
     pkill -f "python3 main.py" 2>/dev/null
-    pkill -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null
-    # 재시작 루프(bash -c while true)도 종료
-    pkill -f "while true.*cloudflared" 2>/dev/null
+    sudo tailscale funnel reset 2>/dev/null
 }
 
 if [ "$1" = "stop" ]; then
@@ -57,29 +55,29 @@ for i in $(seq 1 10); do
     sleep 0.5
 done
 
-# ── Cloudflare 터널 시작 ──────────────────────────────────────────────────────
+# ── Tailscale Funnel 시작 ─────────────────────────────────────────────────────
 if [ "$1" = "--no-tunnel" ]; then
     echo "[3/4] 터널 생략 (--no-tunnel)"
 else
-    echo "[3/4] Cloudflare 터널 시작 중..."
-    > "$TUNNEL_LOG"  # 이전 세션 로그 초기화
-    nohup bash -c "while true; do cloudflared tunnel --url http://localhost:$PORT >> \"$TUNNEL_LOG\" 2>&1; echo '[tunnel] 재연결 중...' >> \"$TUNNEL_LOG\"; sleep 3; done" > /dev/null 2>&1 &
-    TUNNEL_PID=$!
+    echo "[3/4] Tailscale Funnel 시작 중..."
+    sudo tailscale funnel reset 2>/dev/null
+    sudo tailscale funnel --bg "$PORT" 2>/dev/null
 
-    # 대시보드 터널 URL 대기 (최대 15초)
-    for i in $(seq 1 30); do
-        URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$TUNNEL_LOG" 2>/dev/null | tail -1)
-        if [ -n "$URL" ]; then
-            echo "    ✓ 터널 연결 완료 (PID: $TUNNEL_PID)"
-            echo "    외부 주소 (대시보드): $URL"
-            break
-        fi
-        if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-            echo "    ✗ 터널 시작 실패. 로그 확인: $TUNNEL_LOG"
-            break
-        fi
-        sleep 0.5
-    done
+    # URL 추출 (machine-name.tail-xxxx.ts.net)
+    URL=$(tailscale funnel status 2>/dev/null | grep -o "https://[^ ]*" | head -1)
+    if [ -z "$URL" ]; then
+        # fallback: tailscale status에서 DNSName 파싱
+        DNS=$(tailscale status --json 2>/dev/null | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('Self',{}).get('DNSName','').rstrip('.'))" 2>/dev/null)
+        [ -n "$DNS" ] && URL="https://$DNS"
+    fi
+
+    if [ -n "$URL" ]; then
+        echo "    ✓ 터널 연결 완료"
+        echo "    외부 주소 (대시보드): $URL"
+    else
+        echo "    ✗ URL 확인 실패. 'tailscale funnel status' 로 직접 확인하세요."
+    fi
 
     # Meshcat은 대시보드 프록시(/meshcat)로 접속 — 별도 터널 불필요
     echo "[4/4] Meshcat 접속 주소:"

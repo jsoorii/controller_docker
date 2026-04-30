@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 .env
 
+# 설치 패키지
+*.deb
+
 # 실행 중 생성되는 로그나 임시 파일
 *.log
 install/

@@ -1,0 +1,86 @@
+<mujoco model="two_finger_gripper">
+  <!--
+    2-finger 2-DOF gripper for ReGraspReflex validation.
+
+    Finger 0 (left,  x=-0.035): j0_prox / j0_dist, axis=+Y, +angle closes (tip +x).
+    Finger 1 (right, x=+0.035): j1_prox / j1_dist, axis=-Y, +angle closes (tip -x).
+    Object cylinder (fixed): radius=0.013, at (0, 0, 0.034).
+    Contact angle target ≈ 0.18 rad on all joints.
+    Gravity disabled.
+  -->
+
+  <option timestep="0.002" gravity="0 0 0" integrator="Euler"/>
+  <compiler angle="radian"/>
+
+  <worldbody>
+
+    <!-- 팜 (고정) -->
+    <body name="palm" pos="0 0 0.12">
+      <geom name="palm_geom" type="box" size="0.05 0.012 0.008"
+            rgba="0.55 0.55 0.55 1" contype="0" conaffinity="0"/>
+
+      <!-- 손가락 0: 왼쪽 x=-0.035, -Y축 회전 → 양각도 = 닫힘(팁 +x, 중심 방향) -->
+      <body name="f0_prox_body" pos="-0.035 0 0">
+        <joint name="j0_prox" type="hinge" axis="0 -1 0"
+               range="-0.05 1.57" damping="0.05"/>
+        <geom name="f0_prox_geom" type="capsule" size="0.007"
+              fromto="0 0 0  0 0 -0.05" rgba="0.2 0.75 0.2 1"
+              condim="3" friction="1.0 0.005 0.0001"/>
+
+        <body name="f0_dist_body" pos="0 0 -0.05">
+          <joint name="j0_dist" type="hinge" axis="0 -1 0"
+                 range="-0.05 1.57" damping="0.05"/>
+          <geom name="f0_dist_geom" type="capsule" size="0.007"
+                fromto="0 0 0  0 0 -0.04" rgba="0.3 0.9 0.3 1"
+                condim="3" friction="1.0 0.005 0.0001"/>
+          <site name="tip0" pos="0 0 -0.04" size="0.009"/>
+        </body>
+      </body>
+
+      <!-- 손가락 1: 오른쪽 x=+0.035, +Y축 회전 → 양각도 = 닫힘(팁 -x, 중심 방향) -->
+      <body name="f1_prox_body" pos="0.035 0 0">
+        <joint name="j1_prox" type="hinge" axis="0 1 0"
+               range="-0.05 1.57" damping="0.05"/>
+        <geom name="f1_prox_geom" type="capsule" size="0.007"
+              fromto="0 0 0  0 0 -0.05" rgba="0.2 0.2 0.75 1"
+              condim="3" friction="1.0 0.005 0.0001"/>
+
+        <body name="f1_dist_body" pos="0 0 -0.05">
+          <joint name="j1_dist" type="hinge" axis="0 1 0"
+                 range="-0.05 1.57" damping="0.05"/>
+          <geom name="f1_dist_geom" type="capsule" size="0.007"
+                fromto="0 0 0  0 0 -0.04" rgba="0.3 0.3 0.9 1"
+                condim="3" friction="1.0 0.005 0.0001"/>
+          <site name="tip1" pos="0 0 -0.04" size="0.009"/>
+        </body>
+      </body>
+    </body>
+
+    <!-- 파지 물체: 고정(freejoint 없음), 손가락이 닫혀 닿는 표적 -->
+    <body name="object" pos="0 0 0.034">
+      <geom name="object_geom" type="cylinder" size="0.013 0.025"
+            rgba="0.95 0.6 0.1 1" mass="0.1"
+            condim="3" friction="1.0 0.005 0.0001"/>
+    </body>
+
+  </worldbody>
+
+  <!-- 독립 위치 액추에이터 (손가락 0: idx 0-1, 손가락 1: idx 2-3) -->
+  <actuator>
+    <position name="act_j0_prox" joint="j0_prox" kp="30"
+              forcelimited="true" forcerange="-8 8"/>
+    <position name="act_j0_dist" joint="j0_dist" kp="30"
+              forcelimited="true" forcerange="-8 8"/>
+    <position name="act_j1_prox" joint="j1_prox" kp="30"
+              forcelimited="true" forcerange="-8 8"/>
+    <position name="act_j1_dist" joint="j1_dist" kp="30"
+              forcelimited="true" forcerange="-8 8"/>
+  </actuator>
+
+  <!-- 팁 접촉력 센서 (touch = 법선력 스칼라 합) -->
+  <sensor>
+    <touch name="touch0" site="tip0"/>
+    <touch name="touch1" site="tip1"/>
+  </sensor>
+
+</mujoco>

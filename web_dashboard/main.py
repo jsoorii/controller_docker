@@ -38,24 +38,62 @@ CONTAINER_NAME = "ur5e_mujoco_ros2"
 # ── MeshCat 포트 동적 탐지 ─────────────────────────────────────────────────────
 _CONTAINER_LOG_PATHS = ["/tmp/bg.log", "/tmp/main_test.log"]
 
-def _find_meshcat_port() -> int:
-    """컨테이너 내부 로그에서 MeshCat URL을 읽어 포트를 반환. 실패 시 스캔."""
+def _meshcat_has_scene(port: int) -> bool:
+    """해당 포트의 MeshCat WebSocket이 씬 데이터를 전송하는지 확인."""
+    import base64, hashlib
+    key = base64.b64encode(b"meshcatcheck00==").decode()
+    accept = base64.b64encode(
+        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    ).decode()
     try:
-        container = docker.from_env().containers.get(CONTAINER_NAME)
-        for log_path in _CONTAINER_LOG_PATHS:
-            try:
-                _, raw = container.exec_run(f"cat {log_path}", demux=False)
-                text = raw.decode(errors="ignore") if raw else ""
-                matches = re.findall(r"http://127\.0\.0\.1:(\d+)", text)
-                if matches:
-                    port = int(matches[-1])
-                    with socket.create_connection(("localhost", port), timeout=1):
-                        return port
-            except Exception:
-                continue
+        s = socket.socket()
+        s.settimeout(1.0)
+        s.connect(("localhost", port))
+        s.sendall(
+            f"GET / HTTP/1.1\r\nHost: localhost:{port}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        resp = s.recv(512)
+        if b"101" not in resp:
+            return False
+        s.settimeout(0.5)
+        data = s.recv(65536)
+        return len(data) > 0
     except Exception:
-        pass
-    # 로그에서 못 찾으면 7000~7010 중 응답하는 포트를 높은 번호부터 탐색 (최신 인스턴스 우선)
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _find_meshcat_port() -> int:
+    """컨테이너 내 /tmp/meshcat_port.txt를 우선 읽고, 없으면 WS 씬 데이터 탐색."""
+    # 1) main_test.py가 기록한 포트 파일 우선 참조
+    container = get_container()
+    if container and container.status == "running":
+        try:
+            exit_code, output = container.exec_run(
+                ["cat", "/tmp/meshcat_port.txt"], stderr=False
+            )
+            if exit_code == 0 and output:
+                port = int(output.strip())
+                return port
+        except Exception:
+            pass
+
+    # 2) 포트 파일 없으면 씬 데이터 WS 탐색 (폴백)
+    for port in range(7010, 6999, -1):
+        try:
+            with socket.create_connection(("localhost", port), timeout=0.3):
+                pass
+        except Exception:
+            continue
+        if _meshcat_has_scene(port):
+            return port
+    # 씬 데이터 없어도 응답하는 포트 반환 (최종 폴백)
     for port in range(7010, 6999, -1):
         try:
             with socket.create_connection(("localhost", port), timeout=0.3):
@@ -65,7 +103,7 @@ def _find_meshcat_port() -> int:
     return 7000
 
 _meshcat_port_cache: tuple[int, float] = (0, 0.0)
-_MESHCAT_PORT_TTL = 5.0  # seconds
+_MESHCAT_PORT_TTL = 30.0  # seconds (WS probe가 느리므로 캐시 유지)
 
 def get_meshcat_port() -> int:
     global _meshcat_port_cache
@@ -364,6 +402,32 @@ async def pub_joint(body: dict, _: None = Depends(require_auth)):
     return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
 
 
+@app.get("/api/sim/errors")
+async def sim_errors(_: None = Depends(require_auth)):
+    """bg.log 마지막 150줄에서 상태 갱신 줄을 제거하고, 에러 포함 여부와 함께 반환한다."""
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(
+        ["/bin/bash", "-c", "tail -n 150 /tmp/bg.log 2>/dev/null || true"],
+        stderr=False,
+    )
+    raw = output.decode(errors="replace")
+
+    # \r 포함 줄(상태/그립 실시간 덮어쓰기 라인) 및 빈 줄 제거
+    _SKIP = ("[상태]:", "[Grasp]", "\r")
+    lines = [
+        l for l in raw.splitlines()
+        if l.strip() and not any(l.startswith(s) or s in l[:12] for s in _SKIP)
+    ]
+
+    # 에러 키워드 감지
+    _ERR_KW = ("Traceback", "Exception", "Error", "error:", "❌", "Warning")
+    has_error = any(any(kw in l for kw in _ERR_KW) for l in lines)
+
+    return {"lines": lines[-40:], "has_error": has_error}
+
+
 @app.get("/api/sim/status")
 async def sim_status(_: None = Depends(require_auth)):
     """컨테이너 내 main_test.py 프로세스 목록을 반환한다."""
@@ -434,10 +498,50 @@ async def pub_hand(body: dict, _: None = Depends(require_auth)):
     if not topic or not msg_type:
         raise HTTPException(status_code=400, detail="topic and msg_type are required")
 
+    # value_type: "float" (기본) 또는 "bool"
+    value_type = body.get("value_type", "float")
+    if value_type == "bool":
+        ros_value = "true" if bool(value) else "false"
+    else:
+        ros_value = str(float(value))
+
     cmd = (
         f"source /opt/ros/humble/setup.bash && "
-        f"ros2 topic pub --times 3 --wait-matching-subscriptions 0 "
-        f"{topic} {msg_type} '{{  {field}: {float(value)}  }}'"
+        f"ros2 topic pub --times 3 --rate 100 --wait-matching-subscriptions 0 "
+        f"{topic} {msg_type} '{{  {field}: {ros_value}  }}'"
+    )
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["/bin/bash", "-c", cmd], stderr=True)
+    return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
+
+
+@app.post("/api/pub/object_position")
+async def pub_object_position(_: None = Depends(require_auth)):
+    """/mujoco/query_objects 토픽을 발행하여 씬 내 물체 위치 발행을 트리거한다.
+    object_approach_node 가 구독 중이면 /mujoco/scene_objects 에 JSON 위치를 발행한다."""
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        "ros2 topic pub --times 1 --wait-matching-subscriptions 0 "
+        "/mujoco/query_objects std_msgs/msg/String '{data: \"\"}'"
+    )
+    exit_code, output = container.exec_run(["/bin/bash", "-c", cmd], stderr=True)
+    return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
+
+
+@app.post("/api/pub/regrasp")
+async def pub_regrasp(body: dict, _: None = Depends(require_auth)):
+    """ReGrasp Reflex 활성화/비활성화를 /ur5e/cmd/regrasp 토픽으로 발행한다."""
+    enabled = bool(body.get("enabled", False))
+    cmd = (
+        f"source /opt/ros/humble/setup.bash && "
+        f"ros2 topic pub --times 3 --rate 100 --wait-matching-subscriptions 0 "
+        f"/ur5e/cmd/regrasp std_msgs/msg/Bool "
+        f"'{{data: {'true' if enabled else 'false'}}}'"
     )
     container = get_container()
     if container is None or container.status != "running":
@@ -467,16 +571,41 @@ async def sim_restart(_: None = Depends(require_auth)):
     container = get_container()
     if container is None or container.status != "running":
         raise HTTPException(status_code=409, detail="Container not running")
+
+    # 1단계: 기존 프로세스 종료 + 정리 (동기 — SIGKILL이므로 즉시 완료)
     container.exec_run(
         ["/bin/bash", "-c",
          "pkill -9 -f 'python3 main_test.py' 2>/dev/null; "
-         "sleep 1; "
+         "pkill -9 -f 'meshcat.servers.zmqserver' 2>/dev/null; "
+         "rm -f /tmp/meshcat_port.txt; "
+         "sleep 1"],
+        detach=False,
+    )
+
+    # 2단계: 새 프로세스 시작 (detach=True → Docker가 프로세스 수명 관리, & 불필요)
+    container.exec_run(
+        ["/bin/bash", "-c",
          "source /opt/ros/humble/setup.bash && "
          "cd /ros2_ws/src/my_ur5e_controller/ && "
-         "exec python3 main_test.py > /tmp/bg.log 2>&1"],
+         "nohup python3 main_test.py > /tmp/bg.log 2>&1"],
         detach=True,
     )
+
+    invalidate_meshcat_port_cache()
     return {"ok": True, "message": "main_test.py 재시작 완료 (로그: /tmp/bg.log)"}
+
+
+@app.get("/api/grasp_state")
+async def grasp_state(_: None = Depends(require_auth)):
+    """컨테이너 내 /tmp/grasp_state.json 을 읽어 반환한다.
+    반사 제어 상태 + 무게 추정 결과 포함."""
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["cat", "/tmp/grasp_state.json"], stderr=False)
+    if exit_code != 0 or not output:
+        raise HTTPException(status_code=503, detail="Grasp state not available yet")
+    return json.loads(output)
 
 
 @app.get("/api/robot_state")
@@ -489,6 +618,161 @@ async def robot_state(_: None = Depends(require_auth)):
     if exit_code != 0 or not output:
         raise HTTPException(status_code=503, detail="State not available yet")
     return json.loads(output)
+
+
+# ── 그리퍼 시뮬레이션 MJPEG 스트림 ──────────────────────────────────────────────
+
+_GRIPPER_VIEWER_PORT    = 7100
+_GRIPPER_VIEWER_SCRIPT  = "/ros2_ws/src/my_ur5e_controller/sim_viewer_server.py"
+_COMBINED_VIEWER_PORT   = 7101
+_COMBINED_VIEWER_SCRIPT = "/ros2_ws/src/my_ur5e_controller/sim_viewer_combined.py"
+_gripper_proc:  asyncio.subprocess.Process | None = None
+_combined_proc: asyncio.subprocess.Process | None = None
+
+
+@app.post("/api/sim/gripper_start")
+async def gripper_start(_: None = Depends(require_auth)):
+    global _gripper_proc
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+
+    # 기존 프로세스 종료
+    if _gripper_proc and _gripper_proc.returncode is None:
+        try:
+            _gripper_proc.terminate()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(_gripper_proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+
+    # 컨테이너 내 잔존 프로세스 정리 (비동기)
+    kill = await asyncio.create_subprocess_exec(
+        "docker", "exec", container.id,
+        "/bin/bash", "-c", "pkill -9 -f sim_viewer_server.py 2>/dev/null; sleep 0.2",
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    await kill.wait()
+
+    # 뷰어 실행 (docker exec를 비동기 태스크로 유지 → 프로세스 수명 관리)
+    _gripper_proc = await asyncio.create_subprocess_exec(
+        "docker", "exec", container.id,
+        "python3", _GRIPPER_VIEWER_SCRIPT, "--port", str(_GRIPPER_VIEWER_PORT),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    return {"ok": True, "port": _GRIPPER_VIEWER_PORT}
+
+
+@app.post("/api/sim/gripper_stop")
+async def gripper_stop(_: None = Depends(require_auth)):
+    global _gripper_proc
+    if _gripper_proc and _gripper_proc.returncode is None:
+        try:
+            _gripper_proc.terminate()
+        except Exception:
+            pass
+    _gripper_proc = None
+    container = get_container()
+    if container is not None and container.status == "running":
+        kill = await asyncio.create_subprocess_exec(
+            "docker", "exec", container.id,
+            "/bin/bash", "-c", "pkill -9 -f sim_viewer_server.py 2>/dev/null",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await kill.wait()
+    return {"ok": True}
+
+
+@app.post("/api/sim/combined_start")
+async def combined_start(_: None = Depends(require_auth)):
+    global _combined_proc
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    if _combined_proc and _combined_proc.returncode is None:
+        try:
+            _combined_proc.terminate()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(_combined_proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+    kill = await asyncio.create_subprocess_exec(
+        "docker", "exec", container.id,
+        "/bin/bash", "-c", "pkill -9 -f sim_viewer_combined.py 2>/dev/null; sleep 0.2",
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    await kill.wait()
+    _combined_proc = await asyncio.create_subprocess_exec(
+        "docker", "exec", container.id,
+        "python3", _COMBINED_VIEWER_SCRIPT, "--port", str(_COMBINED_VIEWER_PORT),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    return {"ok": True, "port": _COMBINED_VIEWER_PORT}
+
+
+@app.post("/api/sim/combined_stop")
+async def combined_stop(_: None = Depends(require_auth)):
+    global _combined_proc
+    if _combined_proc and _combined_proc.returncode is None:
+        try:
+            _combined_proc.terminate()
+        except Exception:
+            pass
+    _combined_proc = None
+    container = get_container()
+    if container is not None and container.status == "running":
+        kill = await asyncio.create_subprocess_exec(
+            "docker", "exec", container.id,
+            "/bin/bash", "-c", "pkill -9 -f sim_viewer_combined.py 2>/dev/null",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await kill.wait()
+    return {"ok": True}
+
+
+@app.get("/api/sim/combined_stream")
+async def combined_stream(request: Request, _: None = Depends(require_auth)):
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=None) as c:
+                async with c.stream(
+                    "GET", f"http://localhost:{_COMBINED_VIEWER_PORT}/"
+                ) as resp:
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        if await request.is_disconnected():
+                            return
+                        yield chunk
+        except Exception:
+            return
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/api/sim/gripper_stream")
+async def gripper_stream(request: Request, _: None = Depends(require_auth)):
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=None) as c:
+                async with c.stream(
+                    "GET", f"http://localhost:{_GRIPPER_VIEWER_PORT}/"
+                ) as resp:
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        if await request.is_disconnected():
+                            return
+                        yield chunk
+        except Exception:
+            return
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 # ── Meshcat 프록시 ────────────────────────────────────────────────────────────
