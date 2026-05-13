@@ -5,6 +5,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DASHBOARD_LOG="/tmp/heroi-dashboard.log"
+SIM_LOG="/tmp/heroi-sim.log"
 PID_FILE="/tmp/heroi-dashboard.pid"
 PORT=8765
 
@@ -34,16 +35,18 @@ _kill_dashboard() {
 
 # ── stop 명령 ─────────────────────────────────────────────────────────────────
 if [ "$1" = "stop" ]; then
-    echo "[1/2] 대시보드 종료 중..."
+    echo "[1/3] 대시보드 종료 중..."
     _kill_dashboard && echo "    ✓ 대시보드 종료" || echo "    - 실행 중인 대시보드 없음"
-    echo "[2/2] 컨테이너 종료 중..."
+    echo "[2/3] 시뮬레이션 종료 중..."
+    docker exec ur5e_mujoco_ros2 pkill -f "main_test.py" 2>/dev/null && echo "    ✓ 시뮬레이션 종료" || echo "    - 실행 중인 시뮬레이션 없음"
+    echo "[3/3] 컨테이너 종료 중..."
     docker compose -f "$SCRIPT_DIR/docker-compose.yaml" down
     echo "    ✓ 종료 완료"
     exit 0
 fi
 
 # ── Docker 데몬 확인 ──────────────────────────────────────────────────────────
-echo "[1/4] Docker 상태 확인 중..."
+echo "[1/5] Docker 상태 확인 중..."
 if ! docker info > /dev/null 2>&1; then
     echo "    ✗ Docker Desktop이 실행 중이 아닙니다. Docker Desktop을 먼저 실행해 주세요."
     exit 1
@@ -51,7 +54,7 @@ fi
 echo "    ✓ Docker 실행 중"
 
 # ── 컨테이너 시작 ─────────────────────────────────────────────────────────────
-echo "[2/4] 컨테이너 시작 중..."
+echo "[2/5] 컨테이너 시작 중..."
 docker compose -f "$SCRIPT_DIR/docker-compose.yaml" up -d 2>&1 | sed 's/^/    /'
 if ! docker ps --filter name=ur5e_mujoco_ros2 --filter status=running --format '{{.Names}}' | grep -q ur5e_mujoco_ros2; then
     echo "    ✗ 컨테이너 시작 실패"
@@ -59,13 +62,23 @@ if ! docker ps --filter name=ur5e_mujoco_ros2 --filter status=running --format '
 fi
 echo "    ✓ 컨테이너 실행 중"
 
+# ── 시뮬레이션 시작 ───────────────────────────────────────────────────────────
+echo "[3/5] 시뮬레이션(main_test.py) 시작 중..."
+docker exec ur5e_mujoco_ros2 pkill -f "main_test.py" 2>/dev/null || true
+docker exec -d ur5e_mujoco_ros2 bash -c \
+    "source /opt/ros/humble/setup.bash && \
+     source /ros2_ws/install/setup.bash && \
+     cd /ros2_ws/src/my_ur5e_controller && \
+     python3 main_test.py > $SIM_LOG 2>&1"
+echo "    ✓ 시뮬레이션 백그라운드 시작 (로그: $SIM_LOG)"
+
 # ── Python 의존성 설치 ────────────────────────────────────────────────────────
-echo "[3/4] Python 패키지 확인 중..."
+echo "[4/5] Python 패키지 확인 중..."
 pip3 install -q -r "$SCRIPT_DIR/web_dashboard/requirements.txt"
 echo "    ✓ 패키지 준비 완료"
 
 # ── 대시보드 시작 ─────────────────────────────────────────────────────────────
-echo "[4/4] 대시보드 서버 시작 중..."
+echo "[5/5] 대시보드 서버 시작 중..."
 _kill_dashboard
 
 cd "$SCRIPT_DIR/web_dashboard"
@@ -82,7 +95,8 @@ for i in $(seq 1 20); do
         echo "  대시보드:  http://$LOCAL_IP:$PORT"
         echo "  Meshcat:   http://$LOCAL_IP:8000"
         echo ""
-        echo "로그: tail -f $DASHBOARD_LOG"
+        echo "로그: tail -f $DASHBOARD_LOG  (대시보드)"
+        echo "      tail -f $SIM_LOG        (시뮬레이션)"
         echo "종료: ./start.sh stop"
         exit 0
     fi
