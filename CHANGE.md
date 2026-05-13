@@ -2,6 +2,11 @@
 
 | Date | Description | Rollback Commit |
 |------|-------------|-----------------|
+| 2026-05-13 | [macos] README.md / PROJECT.md macOS 브랜치 기준으로 전면 재작성: 포트 변경, 인증 제거, start.sh 추가, main↔macos 차이점 표 추가. | `a402c30` |
+| 2026-05-13 | [macos] 로그인 인증 기능 전면 제거: main.py에서 HTTPBasic/secrets/require_auth 제거, index.html 로그인 오버레이 CSS·HTML·JS 제거, apiFetch()를 인증 없는 단순 fetch 래퍼로 교체. | `a402c30` |
+| 2026-05-13 | [macos] start.sh 추가: Docker 상태 확인 → 컨테이너 시작 → pip 패키지 확인 → 대시보드 백그라운드 실행을 한 명령으로 처리. `./start.sh stop`으로 전체 종료. | `23aca55` |
+| 2026-05-13 | [macos] AirPlay Receiver 포트 충돌 해결: 호스트 포트 7000-7010 → 8000-8010 (Meshcat), 7100→8100 (Gripper viewer), 7101→8101 (Combined viewer). main.py 포트 탐색 범위 및 launch.sh 안내 주소 동기화. | `01533c1` |
+| 2026-05-13 | [macos] macOS 네이티브 실행 지원: docker-compose에서 network_mode:host 제거 → 명시적 포트 매핑, DISPLAY 환경변수 제거(osmesa headless 유지). launch.sh에서 hostname -I → ipconfig getifaddr, ss -tlnp → lsof로 교체. | `1a00fd2` |
 | 2026-04-30 | sim_restart 재시작 안 되는 버그 수정: exec_run(detach=True)+& 조합에서 bash 종료 시 Docker exec 세션이 백그라운드 프로세스를 함께 종료하는 문제 → 1단계(kill+cleanup, detach=False) / 2단계(시작, detach=True, & 없음) 분리로 수정. | `363131c` |
 | 2026-04-29 | regrasp 버그 2건 수정: regraspToggle()에 Content-Type 헤더 추가(누락으로 FastAPI 422 반환→토픽 미발행), sim_restart 명령 끝에 & 추가(없으면 bash가 무한 대기→재시작 실패·다중 인스턴스 race condition). | `363131c` |
 | 2026-04-29 | MeshCat stale zmqserver 문제 수정: main_test.py가 시작 시 /tmp/meshcat_port.txt에 포트 기록, main.py _find_meshcat_port()가 해당 파일 우선 읽기, sim_restart 시 zmqserver 전체 종료+포트 파일 삭제 추가. | `363131c` |

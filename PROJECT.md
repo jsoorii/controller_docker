@@ -48,15 +48,20 @@ UR5e 로봇팔 + Robotiq 2F-85 그리퍼를 MuJoCo 물리 시뮬레이션에서 
 
 ## 시스템 구성
 
+> **macOS 브랜치** — Docker Desktop + 명시적 포트 매핑, 인증 없음
+
 ```
-[외부 브라우저]
-     │  HTTPS (Tailscale Funnel)
+[브라우저]
+     │  HTTP (localhost 또는 Tailscale Funnel)
      ▼
-[web_dashboard/main.py]  ← FastAPI 서버, 호스트에서 실행
-     │  Docker API + REST + WebSocket
-     │  WS /meshcat-ws  → zmqserver 프록시 (포트: /tmp/meshcat_port.txt)
+[web_dashboard/main.py]  ← FastAPI 서버, 호스트(Mac)에서 실행
+     │  Docker SDK + REST + WebSocket
+     │  WS /meshcat-ws  → zmqserver 프록시 (host:8000-8010)
      ▼
 [Docker 컨테이너: ur5e_mujoco_ros2]
+     │  포트 매핑: 8000-8010 → 7000-7010 (Meshcat)
+     │             8100 → 7100 (Gripper viewer)
+     │             8101 → 7101 (Combined viewer)
      │  ROS2 (Humble) 토픽
      ▼
 [my_ur5e_controller/main_test.py]  ← 시뮬레이션 엔트리포인트
@@ -79,7 +84,8 @@ heroi/
 ├── CHANGE.md                    ← 변경 이력
 ├── CLAUDE.md                    ← Claude Code 규칙 (kr_ prefix 제외 등)
 ├── Dockerfile                   ← ROS2 Humble + MuJoCo + Python 환경
-├── docker-compose.yaml          ← 컨테이너 설정 (host network, 볼륨 마운트)
+├── docker-compose.yaml          ← 컨테이너 설정 (포트 매핑, 볼륨 마운트)
+├── start.sh                     ← 전체 스택 한번에 시작/종료 (macOS 전용)
 ├── cloudflared-linux-amd64.deb  ← Cloudflare Tunnel 설치파일 (미사용, gitignore 예정)
 │
 ├── my_ur5e_controller/          ← 시뮬레이션 코어 (컨테이너 내 /ros2_ws/src/my_ur5e_controller)
@@ -235,11 +241,11 @@ FastAPI 기반 웹 대시보드. 호스트에서 실행되며 Docker SDK로 컨�
 | `GET /meshcat` | Meshcat 3D 시각화 (프록시, `/tmp/meshcat_port.txt` 기반 포트 탐지) |
 | `WS /meshcat-ws` | Meshcat WebSocket 프록시 |
 
-인증: HTTP Basic Auth (`.env`의 `AUTH_USERNAME`, `AUTH_PASSWORD`)
+인증: 없음 (macOS 로컬 전용 브랜치)
 
 **Meshcat 포트 탐지 전략** (stale zmqserver 문제 방지):
 1. 컨테이너 내 `/tmp/meshcat_port.txt` 파일 우선 읽기 (main_test.py가 시작 시 기록)
-2. 파일 없으면 WS 씬 데이터 수신 여부로 7010→7000 탐색 (폴백)
+2. 파일 없으면 WS 씬 데이터 수신 여부로 8010→8000 탐색 (호스트 포트 기준, 폴백)
 3. `sim/restart` 시 기존 zmqserver 전체 종료 + 포트 파일 삭제 + 포트 캐시 무효화
 
 **알려진 버그 수정 이력**:
@@ -287,22 +293,23 @@ FastAPI 기반 웹 대시보드. 호스트에서 실행되며 Docker SDK로 컨�
 
 ## 실행 방법
 
-### 1. 시뮬레이션 컨테이너 시작
+### 1. 전체 스택 한번에 시작 (권장)
 ```bash
-cd /media/jsoori/claw_ws/heroi
-docker compose up -d --build
-# 컨테이너 내에서 시뮬레이션 시작
-docker exec ur5e_mujoco_ros2 bash -c \
-  "source /opt/ros/humble/setup.bash && \
-   cd /ros2_ws/src/my_ur5e_controller && \
-   nohup python3 main_test.py > /tmp/bg.log 2>&1 &"
+cd controller_docker
+./start.sh           # 컨테이너 + 대시보드 동시 시작
+./start.sh stop      # 전체 종료
 ```
 
-### 2. 웹 대시보드 시작
+### 2. 수동 실행
 ```bash
-cd /media/jsoori/claw_ws/heroi/web_dashboard
-./launch.sh            # Tailscale Funnel 포함
+# 컨테이너 빌드 & 시작
+docker compose up -d --build
+
+# 웹 대시보드 시작 (별도 터미널)
+cd web_dashboard
+pip3 install -r requirements.txt
 ./launch.sh --no-tunnel  # 로컬 전용 (포트 8765)
+./launch.sh              # Tailscale Funnel 포함
 ./launch.sh stop         # 종료
 ```
 
