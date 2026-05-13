@@ -7,10 +7,12 @@ services:
     volumes:
       - ./my_ur5e_controller:/ros2_ws/src/my_ur5e_controller
       - ./web_dashboard:/ros2_ws/src/web_dashboard
-    network_mode: host  # 원격 접속의 편의성을 위해 host 모드 권장
+    ports:
+      - "7000-7010:7000-7010"  # Meshcat (동적 포트 범위)
+      - "7100:7100"             # Gripper viewer (MJPEG)
+      - "7101:7101"             # Combined viewer (MJPEG)
     stdin_open: true
     tty: true
     privileged: true
     environment:
-      - DISPLAY=$DISPLAY
-      - MUJOCO_GL=osmesa # GUI가 없는 환경이므로 osmesa 설정
+      - MUJOCO_GL=osmesa

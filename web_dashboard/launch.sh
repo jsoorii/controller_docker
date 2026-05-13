@@ -8,6 +8,24 @@ TUNNEL_LOG="/tmp/heroi-tunnel.log"
 MESHCAT_TUNNEL_LOG="/tmp/heroi-meshcat-tunnel.log"
 PORT=8765
 
+# macOS / Linux 공통 유틸 함수
+_local_ip() {
+    if [ "$(uname)" = "Darwin" ]; then
+        ipconfig getifaddr en0 2>/dev/null \
+            || ipconfig getifaddr en1 2>/dev/null \
+            || hostname
+    else
+        hostname -I | awk '{print $1}'
+    fi
+}
+_port_in_use() {
+    if [ "$(uname)" = "Darwin" ]; then
+        lsof -i TCP:"$1" -sTCP:LISTEN -P -n 2>/dev/null | grep -q LISTEN
+    else
+        ss -tlnp 2>/dev/null | grep -q ":$1 "
+    fi
+}
+
 # ── stop 명령 ─────────────────────────────────────────────────────────────────
 _stop_all() {
     pkill -f "python3 main.py" 2>/dev/null
@@ -27,7 +45,7 @@ _stop_all
 
 # 포트가 완전히 해제될 때까지 대기 (최대 10초)
 for i in $(seq 1 20); do
-    if ! ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
+    if ! _port_in_use "$PORT"; then
         break
     fi
     sleep 0.5
@@ -42,7 +60,7 @@ DASHBOARD_PID=$!
 # 서버 정상 기동 확인 (최대 5초)
 for i in $(seq 1 10); do
     if grep -q "Uvicorn running" "$DASHBOARD_LOG" 2>/dev/null; then
-        LOCAL_IP=$(hostname -I | awk '{print $1}')
+        LOCAL_IP=$(_local_ip)
         echo "    ✓ 서버 실행 완료 (PID: $DASHBOARD_PID)"
         echo "    로컬 주소:         http://$LOCAL_IP:$PORT"
         echo "    Meshcat 로컬 주소: http://$LOCAL_IP:7000"
