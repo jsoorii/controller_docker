@@ -63,7 +63,7 @@ for i in $(seq 1 10); do
         LOCAL_IP=$(_local_ip)
         echo "    ✓ 서버 실행 완료 (PID: $DASHBOARD_PID)"
         echo "    로컬 주소:         http://$LOCAL_IP:$PORT"
-        echo "    Meshcat 로컬 주소: http://$LOCAL_IP:7000"
+        echo "    Meshcat 로컬 주소: http://$LOCAL_IP:8000"
         break
     fi
     if ! kill -0 $DASHBOARD_PID 2>/dev/null; then

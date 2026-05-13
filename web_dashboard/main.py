@@ -85,7 +85,7 @@ def _find_meshcat_port() -> int:
             pass
 
     # 2) 포트 파일 없으면 씬 데이터 WS 탐색 (폴백)
-    for port in range(7010, 6999, -1):
+    for port in range(8010, 7999, -1):
         try:
             with socket.create_connection(("localhost", port), timeout=0.3):
                 pass
@@ -94,13 +94,13 @@ def _find_meshcat_port() -> int:
         if _meshcat_has_scene(port):
             return port
     # 씬 데이터 없어도 응답하는 포트 반환 (최종 폴백)
-    for port in range(7010, 6999, -1):
+    for port in range(8010, 7999, -1):
         try:
             with socket.create_connection(("localhost", port), timeout=0.3):
                 return port
         except Exception:
             continue
-    return 7000
+    return 8000
 
 _meshcat_port_cache: tuple[int, float] = (0, 0.0)
 _MESHCAT_PORT_TTL = 30.0  # seconds (WS probe가 느리므로 캐시 유지)
@@ -622,9 +622,9 @@ async def robot_state(_: None = Depends(require_auth)):
 
 # ── 그리퍼 시뮬레이션 MJPEG 스트림 ──────────────────────────────────────────────
 
-_GRIPPER_VIEWER_PORT    = 7100
+_GRIPPER_VIEWER_PORT    = 8100
 _GRIPPER_VIEWER_SCRIPT  = "/ros2_ws/src/my_ur5e_controller/sim_viewer_server.py"
-_COMBINED_VIEWER_PORT   = 7101
+_COMBINED_VIEWER_PORT   = 8101
 _COMBINED_VIEWER_SCRIPT = "/ros2_ws/src/my_ur5e_controller/sim_viewer_combined.py"
 _gripper_proc:  asyncio.subprocess.Process | None = None
 _combined_proc: asyncio.subprocess.Process | None = None
