@@ -38,44 +38,10 @@
       white-space: pre-wrap;
       word-break: break-all;
     }
-
-    /* 로그인 오버레이 */
-    #login-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.6);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 9999;
-    }
-    #login-box {
-      background: #fff;
-      border-radius: 12px;
-      padding: 2rem;
-      width: 320px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-    }
-    #login-box h5 { margin-bottom: 1.2rem; font-weight: 700; }
-    #login-error { color: #dc3545; font-size: 0.85rem; min-height: 1.2em; }
   </style>
 </head>
 <body>
 
-<!-- 로그인 오버레이 -->
-<div id="login-overlay">
-  <div id="login-box">
-    <h5>🤖 Heroi Dashboard 로그인</h5>
-    <div class="mb-3">
-      <label class="form-label small">아이디</label>
-      <input id="login-user" type="text" class="form-control" autocomplete="username" />
-    </div>
-    <div class="mb-3">
-      <label class="form-label small">비밀번호</label>
-      <input id="login-pass" type="password" class="form-control" autocomplete="current-password"
-             onkeydown="if(event.key==='Enter') doLogin()" />
-    </div>
-    <div id="login-error"></div>
-    <button class="btn btn-primary w-100 mt-2" onclick="doLogin()">로그인</button>
-  </div>
-</div>
 
 <!-- 충돌 감지 배너 -->
 <div id="collision-banner" style="display:none; position:sticky; top:0; z-index:1050;
@@ -496,37 +462,9 @@
     if (chevron) chevron.textContent = _collapsed[bodyId] ? '▼' : '▲';
   }
 
-  // ── 인증 ─────────────────────────────────────────────────────────────────
-  let authHeader = sessionStorage.getItem('auth') || '';
-
-  async function doLogin() {
-    const user = document.getElementById('login-user').value.trim();
-    const pass = document.getElementById('login-pass').value;
-    const errEl = document.getElementById('login-error');
-    if (!user || !pass) { errEl.textContent = '아이디와 비밀번호를 입력하세요.'; return; }
-
-    const cand = 'Basic ' + btoa(user + ':' + pass);
-    const res = await fetch('/api/status', { headers: { 'Authorization': cand } });
-    if (res.ok) {
-      authHeader = cand;
-      sessionStorage.setItem('auth', authHeader);
-      document.getElementById('login-overlay').style.display = 'none';
-      init();
-    } else {
-      errEl.textContent = '아이디 또는 비밀번호가 틀렸습니다.';
-      document.getElementById('login-pass').value = '';
-    }
-  }
-
+  // ── API 요청 ──────────────────────────────────────────────────────────────
   async function apiFetch(url, options = {}) {
-    const headers = { 'Authorization': authHeader, ...(options.headers || {}) };
-    const res = await fetch(url, { ...options, headers });
-    if (res.status === 401) {
-      sessionStorage.removeItem('auth');
-      authHeader = '';
-      document.getElementById('login-overlay').style.display = 'flex';
-    }
-    return res;
+    return fetch(url, options);
   }
 
   // ── 상태 ──────────────────────────────────────────────────────────────────
@@ -546,7 +484,7 @@
   // ── 제어 ──────────────────────────────────────────────────────────────────
   async function action(cmd) {
     const res = await apiFetch(`/api/${cmd}`, { method: 'POST' });
-    if (!res.ok && res.status !== 401) {
+    if (!res.ok) {
       const d = await res.json();
       alert(d.detail || JSON.stringify(d));
       return;
@@ -605,7 +543,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cmd }),
     });
-    if (!res.ok && res.status !== 401) return;
+    if (!res.ok) return;
     const d = await res.json();
     document.getElementById('cmd-output').textContent =
       `[exit ${d.exit_code}]\n${d.output}`;
@@ -630,7 +568,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_space: taskSpace }),
     });
-    if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
+    if (!res.ok) { status.textContent = '전송 실패'; return; }
     badge.textContent = taskSpace ? 'Task-space' : 'Joint-space';
     badge.className   = 'badge ' + (taskSpace ? 'bg-success' : 'bg-primary');
     status.textContent = '전환 완료';
@@ -692,7 +630,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
+    if (!res.ok) { status.textContent = '전송 실패'; return; }
     const d = await res.json();
     status.textContent = d.ok
       ? `전송 완료 (${body.position.x.toFixed(3)}, ${body.position.y.toFixed(3)}, ${body.position.z.toFixed(3)})`
@@ -761,7 +699,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ joints, duration }),
     });
-    if (!res.ok && res.status !== 401) { status.textContent = '전송 실패'; return; }
+    if (!res.ok) { status.textContent = '전송 실패'; return; }
     const d = await res.json();
     status.textContent = d.ok ? `전송 완료: [${joints.map(v => v.toFixed(3)).join(', ')}]` : `오류: ${d.output}`;
   }
@@ -826,7 +764,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cmd }),
     });
-    if (!res.ok && res.status !== 401) return;
+    if (!res.ok) return;
     const d = await res.json();
     document.getElementById('cmd-output').textContent =
       d.message + '\n로그: ' + d.log;
@@ -842,7 +780,6 @@
     const box = document.getElementById('log-box');
     try {
       const res = await fetch('/api/logs?lines=200', {
-        headers: { 'Authorization': authHeader },
         signal: logController.signal,
       });
       const reader = res.body.getReader();
@@ -911,7 +848,7 @@
     const card  = document.getElementById('sim-card');
     const res = await apiFetch('/api/sim/status');
     if (!res.ok) {
-      if (res.status !== 401) {
+      if (!res.ok) {
         badge.textContent = '–';
         badge.className = 'badge bg-secondary';
         box.textContent = '컨테이너가 실행 중이 아닙니다.';
@@ -993,7 +930,7 @@
   async function killAllSim() {
     if (!confirm('실행 중인 main_test.py 프로세스를 모두 종료하시겠습니까?')) return;
     const res = await apiFetch('/api/sim/kill', { method: 'POST' });
-    if (!res.ok && res.status !== 401) return;
+    if (!res.ok) return;
     await fetchSimStatus();
   }
 
@@ -1004,7 +941,7 @@
     badge.textContent = '재시작 중…';
     badge.className = 'badge bg-warning text-dark';
     const res = await apiFetch('/api/sim/restart', { method: 'POST' });
-    if (!res.ok && res.status !== 401) {
+    if (!res.ok) {
       badge.textContent = '실패';
       badge.className = 'badge bg-danger';
       return;
@@ -1117,7 +1054,7 @@
 
   async function resetCollision() {
     const res = await apiFetch('/api/sim/collision_reset', { method: 'POST' });
-    if (!res.ok && res.status !== 401) {
+    if (!res.ok) {
       alert('충돌 해제 명령 전송 실패');
     }
   }
@@ -1287,7 +1224,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: enable }),
       });
-      if (!res.ok && res.status !== 401) {
+      if (!res.ok) {
         let detail = `API 오류 (${res.status})`;
         try { detail = (await res.json()).detail || detail; } catch (_) {}
         badge.className  = 'badge bg-danger';
@@ -1334,7 +1271,7 @@
         value: enabled, value_type: 'bool',
       }),
     });
-    if (!res.ok && res.status !== 401) {
+    if (!res.ok) {
       if (statusEl) statusEl.textContent = `전송 실패`;
       return;
     }
@@ -1401,7 +1338,7 @@
     const statusEl = document.getElementById('obj-pos-status');
     if (statusEl) statusEl.textContent = '발행 중…';
     const res = await apiFetch('/api/pub/object_position', { method: 'POST' });
-    if (!res.ok && res.status !== 401) {
+    if (!res.ok) {
       if (statusEl) statusEl.textContent = '전송 실패';
       return;
     }
@@ -1425,7 +1362,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled, margin, kp, kd }),
     });
-    if (!res.ok && res.status !== 401) { badge.textContent = '전송 실패'; return; }
+    if (!res.ok) { badge.textContent = '전송 실패'; return; }
     badge.textContent = `적용됨 (${new Date().toLocaleTimeString()})`;
   }
 
@@ -1543,14 +1480,7 @@
   const savedNote = localStorage.getItem('heroi_note');
   if (savedNote) document.getElementById('note-box').value = savedNote;
 
-  // sessionStorage에 인증 정보가 있으면 바로 대시보드 표시
-  if (authHeader) {
-    document.getElementById('login-overlay').style.display = 'none';
-    init();
-  } else {
-    // 포커스를 아이디 입력창으로
-    window.addEventListener('load', () => document.getElementById('login-user').focus());
-  }
+  init();
 </script>
 </body>
 </html>

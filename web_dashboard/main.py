@@ -4,7 +4,6 @@ Docker 웹 대시보드 - ur5e_mujoco_ros2 컨테이너 제어
 import asyncio
 import json
 import os
-import secrets
 import subprocess
 from pathlib import Path
 from typing import AsyncGenerator
@@ -14,10 +13,9 @@ import websockets as ws_lib
 
 import docker
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
@@ -118,23 +116,7 @@ def invalidate_meshcat_port_cache() -> None:
     global _meshcat_port_cache
     _meshcat_port_cache = (0, 0.0)
 
-# ── 인증 설정 (.env 파일에서 로드) ────────────────────────────────────────────
-AUTH_USERNAME = os.getenv("AUTH_USERNAME", "heroi")
-AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
-
-security = HTTPBasic()
 client = docker.from_env()
-
-
-def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    ok_user = secrets.compare_digest(credentials.username, AUTH_USERNAME)
-    ok_pass = secrets.compare_digest(credentials.password, AUTH_PASSWORD)
-    if not (ok_user and ok_pass):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": 'Basic realm="HeroiDockerDashboard"'},
-        )
 
 
 app = FastAPI(title="Heroi Docker Dashboard")
@@ -152,7 +134,7 @@ def get_container():
 
 
 @app.get("/api/status")
-def status(_: None = Depends(require_auth)):
+def status():
     container = get_container()
     if container is None:
         return {"status": "not_found", "name": CONTAINER_NAME}
@@ -188,12 +170,12 @@ async def _rebuild_generator() -> AsyncGenerator[str, None]:
 
 
 @app.post("/api/rebuild")
-async def rebuild(_: None = Depends(require_auth)):
+async def rebuild():
     return StreamingResponse(_rebuild_generator(), media_type="text/plain")
 
 
 @app.post("/api/start")
-def start(_: None = Depends(require_auth)):
+def start():
     container = get_container()
     if container and container.status == "running":
         return {"ok": True, "message": "Already running"}
@@ -213,7 +195,7 @@ def start(_: None = Depends(require_auth)):
 
 
 @app.post("/api/stop")
-def stop(_: None = Depends(require_auth)):
+def stop():
     container = get_container()
     if container is None:
         raise HTTPException(status_code=404, detail="Container not found")
@@ -222,7 +204,7 @@ def stop(_: None = Depends(require_auth)):
 
 
 @app.post("/api/restart")
-def restart(_: None = Depends(require_auth)):
+def restart():
     container = get_container()
     if container is None:
         raise HTTPException(status_code=404, detail="Container not found")
@@ -231,7 +213,7 @@ def restart(_: None = Depends(require_auth)):
 
 
 @app.post("/api/exec")
-async def exec_command(body: dict, _: None = Depends(require_auth)):
+async def exec_command(body: dict):
     cmd = body.get("cmd", "").strip()
     if not cmd:
         raise HTTPException(status_code=400, detail="cmd is required")
@@ -246,7 +228,7 @@ async def exec_command(body: dict, _: None = Depends(require_auth)):
 
 
 @app.post("/api/exec_bg")
-async def exec_bg(body: dict, _: None = Depends(require_auth)):
+async def exec_bg(body: dict):
     cmd = body.get("cmd", "").strip()
     if not cmd:
         raise HTTPException(status_code=400, detail="cmd is required")
@@ -280,7 +262,7 @@ async def _stream_generator(cmd: str) -> AsyncGenerator[str, None]:
 
 
 @app.post("/api/exec_stream")
-async def exec_stream(body: dict, _: None = Depends(require_auth)):
+async def exec_stream(body: dict):
     cmd = body.get("cmd", "").strip()
     if not cmd:
         raise HTTPException(status_code=400, detail="cmd is required")
@@ -321,7 +303,7 @@ async def _log_generator(lines: int, request: Request) -> AsyncGenerator[str, No
 
 
 @app.get("/api/logs")
-async def logs(request: Request, lines: int = 200, _: None = Depends(require_auth)):
+async def logs(request: Request, lines: int = 200):
     return StreamingResponse(
         _log_generator(lines, request),
         media_type="text/plain",
@@ -331,7 +313,7 @@ async def logs(request: Request, lines: int = 200, _: None = Depends(require_aut
 # ── ROS2 Publish ─────────────────────────────────────────────────────────────
 
 @app.post("/api/pub/mode")
-async def pub_mode(body: dict, _: None = Depends(require_auth)):
+async def pub_mode(body: dict):
     task_space = body.get("task_space", True)
     cmd = (
         f"source /opt/ros/humble/setup.bash && "
@@ -346,7 +328,7 @@ async def pub_mode(body: dict, _: None = Depends(require_auth)):
 
 
 @app.post("/api/pub/ee")
-async def pub_ee(body: dict, _: None = Depends(require_auth)):
+async def pub_ee(body: dict):
     pos = body.get("position", {})
     ori = body.get("orientation", {})
     duration  = float(body.get("duration",  0.0))
@@ -375,7 +357,7 @@ async def pub_ee(body: dict, _: None = Depends(require_auth)):
 
 
 @app.post("/api/pub/joint")
-async def pub_joint(body: dict, _: None = Depends(require_auth)):
+async def pub_joint(body: dict):
     joints = body.get("joints", [])
     duration = float(body.get("duration", 2.0))
     if len(joints) != 6:
@@ -403,7 +385,7 @@ async def pub_joint(body: dict, _: None = Depends(require_auth)):
 
 
 @app.get("/api/sim/errors")
-async def sim_errors(_: None = Depends(require_auth)):
+async def sim_errors():
     """bg.log 마지막 150줄에서 상태 갱신 줄을 제거하고, 에러 포함 여부와 함께 반환한다."""
     container = get_container()
     if container is None or container.status != "running":
@@ -429,7 +411,7 @@ async def sim_errors(_: None = Depends(require_auth)):
 
 
 @app.get("/api/sim/status")
-async def sim_status(_: None = Depends(require_auth)):
+async def sim_status():
     """컨테이너 내 main_test.py 프로세스 목록을 반환한다."""
     container = get_container()
     if container is None or container.status != "running":
@@ -448,7 +430,7 @@ async def sim_status(_: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/kill")
-async def sim_kill(_: None = Depends(require_auth)):
+async def sim_kill():
     """컨테이너 내 main_test.py 프로세스를 모두 종료한다."""
     container = get_container()
     if container is None or container.status != "running":
@@ -461,7 +443,7 @@ async def sim_kill(_: None = Depends(require_auth)):
 
 
 @app.post("/api/pub/soft_limits")
-async def pub_soft_limits(body: dict, _: None = Depends(require_auth)):
+async def pub_soft_limits(body: dict):
     """소프트 리밋 설정을 /ur5e/cmd/soft_limits 토픽으로 발행한다.
     body: {"enabled": bool, "margin": float, "kp": float, "kd": float} — 모두 선택적."""
     import json as _json
@@ -481,13 +463,13 @@ async def pub_soft_limits(body: dict, _: None = Depends(require_auth)):
 
 
 @app.get("/api/hand_config")
-def hand_config(_: None = Depends(require_auth)):
+def hand_config():
     """현재 핸드 UI 설정(hand_ui_config.py의 ACTIVE)을 JSON으로 반환한다."""
     return _HAND_CONFIG
 
 
 @app.post("/api/pub/hand")
-async def pub_hand(body: dict, _: None = Depends(require_auth)):
+async def pub_hand(body: dict):
     """핸드 설정에 정의된 ROS topic으로 값을 발행한다.
     body: {topic, msg_type, msg_field, value}"""
     topic    = body.get("topic", "").strip()
@@ -518,7 +500,7 @@ async def pub_hand(body: dict, _: None = Depends(require_auth)):
 
 
 @app.post("/api/pub/object_position")
-async def pub_object_position(_: None = Depends(require_auth)):
+async def pub_object_position():
     """/mujoco/query_objects 토픽을 발행하여 씬 내 물체 위치 발행을 트리거한다.
     object_approach_node 가 구독 중이면 /mujoco/scene_objects 에 JSON 위치를 발행한다."""
     container = get_container()
@@ -534,7 +516,7 @@ async def pub_object_position(_: None = Depends(require_auth)):
 
 
 @app.post("/api/pub/regrasp")
-async def pub_regrasp(body: dict, _: None = Depends(require_auth)):
+async def pub_regrasp(body: dict):
     """ReGrasp Reflex 활성화/비활성화를 /ur5e/cmd/regrasp 토픽으로 발행한다."""
     enabled = bool(body.get("enabled", False))
     cmd = (
@@ -551,7 +533,7 @@ async def pub_regrasp(body: dict, _: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/collision_reset")
-async def sim_collision_reset(_: None = Depends(require_auth)):
+async def sim_collision_reset():
     """충돌 정지 상태를 해제한다 (/ur5e/cmd/collision_reset 토픽 발행)."""
     container = get_container()
     if container is None or container.status != "running":
@@ -566,7 +548,7 @@ async def sim_collision_reset(_: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/restart")
-async def sim_restart(_: None = Depends(require_auth)):
+async def sim_restart():
     """컨테이너 내 main_test.py를 모두 종료하고 백그라운드에서 재시작한다."""
     container = get_container()
     if container is None or container.status != "running":
@@ -596,7 +578,7 @@ async def sim_restart(_: None = Depends(require_auth)):
 
 
 @app.get("/api/grasp_state")
-async def grasp_state(_: None = Depends(require_auth)):
+async def grasp_state():
     """컨테이너 내 /tmp/grasp_state.json 을 읽어 반환한다.
     반사 제어 상태 + 무게 추정 결과 포함."""
     container = get_container()
@@ -609,7 +591,7 @@ async def grasp_state(_: None = Depends(require_auth)):
 
 
 @app.get("/api/robot_state")
-async def robot_state(_: None = Depends(require_auth)):
+async def robot_state():
     """컨테이너 내 /tmp/robot_state.json을 읽어 반환한다."""
     container = get_container()
     if container is None or container.status != "running":
@@ -631,7 +613,7 @@ _combined_proc: asyncio.subprocess.Process | None = None
 
 
 @app.post("/api/sim/gripper_start")
-async def gripper_start(_: None = Depends(require_auth)):
+async def gripper_start():
     global _gripper_proc
     container = get_container()
     if container is None or container.status != "running":
@@ -666,7 +648,7 @@ async def gripper_start(_: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/gripper_stop")
-async def gripper_stop(_: None = Depends(require_auth)):
+async def gripper_stop():
     global _gripper_proc
     if _gripper_proc and _gripper_proc.returncode is None:
         try:
@@ -686,7 +668,7 @@ async def gripper_stop(_: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/combined_start")
-async def combined_start(_: None = Depends(require_auth)):
+async def combined_start():
     global _combined_proc
     container = get_container()
     if container is None or container.status != "running":
@@ -715,7 +697,7 @@ async def combined_start(_: None = Depends(require_auth)):
 
 
 @app.post("/api/sim/combined_stop")
-async def combined_stop(_: None = Depends(require_auth)):
+async def combined_stop():
     global _combined_proc
     if _combined_proc and _combined_proc.returncode is None:
         try:
@@ -735,7 +717,7 @@ async def combined_stop(_: None = Depends(require_auth)):
 
 
 @app.get("/api/sim/combined_stream")
-async def combined_stream(request: Request, _: None = Depends(require_auth)):
+async def combined_stream(request: Request):
     async def generate():
         try:
             async with httpx.AsyncClient(timeout=None) as c:
@@ -755,7 +737,7 @@ async def combined_stream(request: Request, _: None = Depends(require_auth)):
 
 
 @app.get("/api/sim/gripper_stream")
-async def gripper_stream(request: Request, _: None = Depends(require_auth)):
+async def gripper_stream(request: Request):
     async def generate():
         try:
             async with httpx.AsyncClient(timeout=None) as c:
@@ -779,7 +761,7 @@ async def gripper_stream(request: Request, _: None = Depends(require_auth)):
 
 @app.get("/meshcat")
 @app.get("/meshcat/")
-async def meshcat_index(_: None = Depends(require_auth)):
+async def meshcat_index():
     port = get_meshcat_port()
     async with httpx.AsyncClient() as client:
         r = await client.get(f"http://localhost:{port}/static/")
@@ -792,7 +774,7 @@ async def meshcat_index(_: None = Depends(require_auth)):
 
 
 @app.get("/meshcat/{path:path}")
-async def meshcat_static(path: str, _: None = Depends(require_auth)):
+async def meshcat_static(path: str):
     port = get_meshcat_port()
     async with httpx.AsyncClient() as client:
         r = await client.get(f"http://localhost:{port}/static/{path}")
