@@ -85,11 +85,13 @@ def setup_meshcat_robot(model, data, vis):
             vis["robot"][geom_name].set_object(geom, material)
             vis["robot"][geom_name].set_transform(T)
 
-        # 기본 도형(Plane, Box 등): 정적이므로 초기 한 번만 transform 설정
+        # 지면(Plane)만 정적으로 env에 등록
         elif geom_type == mujoco.mjtGeom.mjGEOM_PLANE:
             vis["env"][geom_name].set_object(g.Box([10, 10, 0.01]))
             vis["env"][geom_name].set_transform(T)
 
+        # BOX는 robot에 등록: 그리퍼 패드(left_pad1/2, right_pad1/2)가 BOX 타입이므로
+        # env에 두면 손가락이 움직여도 패드가 초기 위치에 고정되어 유령처럼 보임
         elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
             size = model.geom_size[i]  # half-sizes
             rgba = get_geom_rgba(model, i)
@@ -97,13 +99,13 @@ def setup_meshcat_robot(model, data, vis):
                 color=int('%02X%02X%02X' % tuple((rgba[:3]*255).astype(int)), 16),
                 opacity=float(rgba[3])
             )
-            vis["env"][geom_name].set_object(g.Box(size * 2), material)
-            vis["env"][geom_name].set_transform(T)
+            vis["robot"][geom_name].set_object(g.Box(size * 2), material)
+            vis["robot"][geom_name].set_transform(T)
 
-# 2. 매 프레임마다 로봇(mesh) geom 위치 업데이트 — env geom은 정적이라 제외
+# 2. 매 프레임마다 robot geom 위치 업데이트 — PLANE(env)만 제외
 def update_visualizer(vis, model, data):
     for i in range(model.ngeom):
-        if model.geom_type[i] != mujoco.mjtGeom.mjGEOM_MESH:
+        if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_PLANE:
             continue
         geom_name = f"geom_{i}"
         pos = data.geom_xpos[i]
@@ -165,7 +167,7 @@ def main():
         while True:
             # 1. 시각화 업데이트 (10Hz: 5프레임마다 1회 — ZMQ 과부하 방지)
             vis_frame += 1
-            if vis_frame % 5 == 0:
+            if vis_frame % 20 == 0:
                 update_visualizer(vis, model, data)
 
             # 폭발 감지 로그

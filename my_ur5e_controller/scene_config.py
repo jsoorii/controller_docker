@@ -39,15 +39,15 @@ class Cylinder:
 # ── 씬에 배치할 오브젝트 목록: 여기만 편집하면 됩니다 ────────────────────────
 
 OBJECTS = [
-    Box(
-        name = "box",
-        pos  = [0.3, 0, 0.015],
-        size = [0.015, 0.015, 0.015],
-        rgba = [0.8, 0.35, 0.1, 1.0],
+    Cylinder(
+        name = "cylinder",
+        pos  = [0.3, 0, 0.1],      # 중심 z = 절반높이 → 바닥 위에 세움
+        size = [0.1, 0.1],          # [반지름 10cm, 절반높이 10cm] → 직경 20cm / 높이 20cm
+        rgba = [0.8, 0.15, 0.1, 1.0],
     ),
     # 추가 예시:
+    # Box(name="box", pos=[0.3, 0, 0.015], size=[0.015, 0.015, 0.015]),
     # Sphere(name="ball", pos=[0.5, 0.2, 0.05], size=0.05),
-    # Cylinder(name="cup", pos=[0.4, -0.2, 0.06], size=[0.04, 0.06]),
 ]
 
 
@@ -69,7 +69,7 @@ def _add_object(spec: mujoco.MjSpec, obj) -> None:
         geom.size[0] = obj.size
     elif isinstance(obj, Cylinder):
         geom.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-        geom.size = obj.size
+        geom.size = [obj.size[0], obj.size[1], 0.0]  # MjSpec은 항상 3원소 요구
 
 
 def add_objects(spec: mujoco.MjSpec) -> None:

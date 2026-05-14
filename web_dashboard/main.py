@@ -516,6 +516,34 @@ async def pub_object_position():
     return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
 
 
+@app.post("/api/pub/approach")
+async def pub_approach(body: dict):
+    """물체 접근을 /ur5e/approach/start 토픽으로 시작한다."""
+    name = body.get("name", "box").strip()
+    cmd = (
+        f"source /opt/ros/humble/setup.bash && "
+        f"ros2 topic pub --times 3 --rate 100 --wait-matching-subscriptions 0 "
+        f"/ur5e/approach/start std_msgs/msg/String '{{data: \"{name}\"}}'"
+    )
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["/bin/bash", "-c", cmd], stderr=True)
+    return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
+
+
+@app.get("/api/approach_state")
+async def approach_state():
+    """컨테이너 내 /tmp/approach_state.json을 읽어 반환한다."""
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["cat", "/tmp/approach_state.json"], stderr=False)
+    if exit_code != 0 or not output:
+        raise HTTPException(status_code=503, detail="Approach state not available")
+    return json.loads(output)
+
+
 @app.post("/api/pub/regrasp")
 async def pub_regrasp(body: dict):
     """ReGrasp Reflex 활성화/비활성화를 /ur5e/cmd/regrasp 토픽으로 발행한다."""

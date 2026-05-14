@@ -159,6 +159,7 @@ class ObjectApproachNode:
         self._stage          = ApproachStage.IDLE
         self._target_body_id = -1
         self._target_name    = ""
+        self._y_noise        = 0.0   # 접근 시작마다 샘플링되는 Y 노이즈 (m)
         self._running        = False
 
         # ROS2 spin 스레드 — 전용 executor 사용 (rclpy.spin 공유 executor 충돌 방지)
@@ -232,11 +233,14 @@ class ObjectApproachNode:
         if body_id == -1:
             print(f"[ApproachNode] 물체 '{name}' 를 모델에서 찾을 수 없습니다.")
             return
+        # Y 노이즈 샘플링: σ=0.025m → ±2σ ≈ ±5cm, [-5cm, 5cm] 클리핑
+        y_noise = float(np.clip(np.random.normal(0.0, 0.025), -0.05, 0.05))
         with self._lock:
             self._target_body_id = body_id
             self._target_name    = name
+            self._y_noise        = y_noise
             self._stage          = ApproachStage.HOVER
-        print(f"[ApproachNode] '{name}' (body_id={body_id}) 접근 시작 → HOVER")
+        print(f"[ApproachNode] '{name}' (body_id={body_id}) 접근 시작 → HOVER  Y노이즈={y_noise*100:+.1f}cm")
 
     # ------------------------------------------------------------------
     # 내부 헬퍼
@@ -245,6 +249,26 @@ class ObjectApproachNode:
     def _get_object_pos(self) -> np.ndarray:
         """현재 물체 월드 위치 반환."""
         return self.data.xpos[self._target_body_id].copy()
+
+    def _get_object_top_z(self, body_id: int) -> float:
+        """물체 body의 geom 크기를 읽어 월드 기준 상단 z를 반환.
+        geom 타입별로 절반 높이를 더해 EE가 물체 위에 위치하도록 한다."""
+        center_z = float(self.data.xpos[body_id][2])
+        half_h   = 0.0
+        for i in range(self.model.ngeom):
+            if self.model.geom_bodyid[i] != body_id:
+                continue
+            t = self.model.geom_type[i]
+            s = self.model.geom_size[i]
+            if t == mujoco.mjtGeom.mjGEOM_CYLINDER:
+                half_h = max(half_h, float(s[1]))  # size[1] = 절반높이
+            elif t == mujoco.mjtGeom.mjGEOM_BOX:
+                half_h = max(half_h, float(s[2]))  # size[2] = z 절반크기
+            elif t == mujoco.mjtGeom.mjGEOM_SPHERE:
+                half_h = max(half_h, float(s[0]))  # size[0] = 반지름
+            elif t == mujoco.mjtGeom.mjGEOM_CAPSULE:
+                half_h = max(half_h, float(s[0]) + float(s[1]))
+        return center_z + half_h
 
     def _make_pose_msg(self, pos: np.ndarray, rot: np.ndarray) -> PoseStamped:
         """위치 + 회전행렬 → PoseStamped (duration=0: 컨트롤러 자동 계산)."""
@@ -274,32 +298,45 @@ class ObjectApproachNode:
     # 접근 루프 한 스텝
     # ------------------------------------------------------------------
 
+    def _write_state(self, stage: ApproachStage, name: str, err: float = 0.0):
+        """접근 단계를 /tmp/approach_state.json으로 저장 (대시보드 폴링용)."""
+        import os
+        state = {"stage": stage.name, "target": name, "err": round(err, 4)}
+        tmp = "/tmp/approach_state.json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, "/tmp/approach_state.json")
+
     def _step(self):
         with self._lock:
             stage   = self._stage
             body_id = self._target_body_id
             name    = self._target_name
+            y_noise = self._y_noise
 
         if stage == ApproachStage.IDLE or body_id == -1:
             return
 
         obj_pos = self._get_object_pos()
         ee_pos  = self._ee_pos()
+        top_z   = self._get_object_top_z(body_id)
 
         if stage == ApproachStage.HOVER:
-            target = obj_pos + np.array([0.0, 0.0, self.hover_height])
+            # Y 노이즈 적용: 물체 위 hover_height 위치로 이동
+            target = np.array([obj_pos[0], obj_pos[1] + y_noise, top_z + self.hover_height])
             err    = np.linalg.norm(ee_pos - target)
 
-            # 아직 목표에 충분히 가깝지 않으면 계속 발행
             if err > self.pos_tol:
                 self._pub.publish(self._make_pose_msg(target, self._ROT_DOWN))
             else:
                 print(f"[ApproachNode] HOVER 완료 (err={err:.4f}m) → DESCEND")
                 with self._lock:
                     self._stage = ApproachStage.DESCEND
+            self._write_state(self._stage, name, err)
 
         elif stage == ApproachStage.DESCEND:
-            target = obj_pos + np.array([0.0, 0.0, self.grasp_offset])
+            # Y 노이즈 적용: 물체 상단 + grasp_offset 위치로 하강
+            target = np.array([obj_pos[0], obj_pos[1] + y_noise, top_z + self.grasp_offset])
             err    = np.linalg.norm(ee_pos - target)
 
             if err > self.pos_tol:
@@ -308,10 +345,10 @@ class ObjectApproachNode:
                 print(f"[ApproachNode] DESCEND 완료 (err={err:.4f}m) → DONE")
                 with self._lock:
                     self._stage = ApproachStage.DONE
+            self._write_state(self._stage, name, err)
 
         elif stage == ApproachStage.DONE:
-            print(f"[ApproachNode] '{name}' 접근 완료. 그리퍼 닫기 준비.")
-            # 더 이상 발행하지 않음 — 상위 레이어에서 그리퍼 명령 전송
+            self._write_state(stage, name, 0.0)
 
     # ------------------------------------------------------------------
     # 실행 / 중지

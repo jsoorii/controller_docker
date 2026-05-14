@@ -1190,6 +1190,11 @@
                     onclick="regraspToggle()">▶ ReGrasp Reflex 실행</button>
             <span id="regrasp-badge" class="badge bg-secondary">중지됨</span>
           </div>
+          <div class="d-flex align-items-center gap-2 mt-1 mb-1">
+            <button id="grasp-regrasp-btn" class="btn btn-outline-danger btn-sm"
+                    onclick="graspAndRegrasp()">🤖 파지 &amp; ReGrasp</button>
+            <span id="grasp-regrasp-status" class="text-muted small"></span>
+          </div>
           ${weightSectionHtml}
           <hr class="my-3"/>
           <div class="d-flex align-items-center gap-2">
@@ -1249,6 +1254,73 @@
       badge.className  = 'badge bg-danger';
       badge.textContent = '오류';
       if (statusEl) statusEl.textContent = `네트워크 오류: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── 파지 & ReGrasp 자동 시퀀스 ────────────────────────────────────────────
+  async function graspAndRegrasp() {
+    const btn      = document.getElementById('grasp-regrasp-btn');
+    const statusEl = document.getElementById('grasp-regrasp-status');
+    const regraspBadge = document.getElementById('regrasp-badge');
+    const regraspBtn   = document.getElementById('regrasp-btn');
+    btn.disabled = true;
+
+    const setStatus = (msg) => { if (statusEl) statusEl.textContent = msg; };
+
+    try {
+      // 1. 물체 접근 시작
+      setStatus('⏳ 접근 명령 전송 중...');
+      const approachRes = await apiFetch('/api/pub/approach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'cylinder' }),
+      });
+      if (!approachRes.ok) { setStatus('❌ 접근 시작 실패'); return; }
+
+      // 2. 접근 완료(DONE)까지 폴링 (최대 30초)
+      let done = false;
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        try {
+          const stRes = await apiFetch('/api/approach_state');
+          if (stRes.ok) {
+            const st = await stRes.json();
+            if (st.stage === 'HOVER')   setStatus(`⏳ HOVER 이동 중... (err ${st.err.toFixed(3)}m)`);
+            if (st.stage === 'DESCEND') setStatus(`⏳ 하강 중... (err ${st.err.toFixed(3)}m)`);
+            if (st.stage === 'DONE')    { done = true; break; }
+          }
+        } catch (_) {}
+      }
+      if (!done) { setStatus('⏱ 타임아웃 — 접근 미완료'); return; }
+
+      // 3. ReGrasp 먼저 활성화 (그리퍼 닫히는 동안 비대칭 접촉 감지)
+      setStatus('🔄 ReGrasp 활성화 중...');
+      const rgRes = await apiFetch('/api/pub/regrasp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+      if (rgRes.ok) {
+        if (regraspBadge) { regraspBadge.className = 'badge bg-success'; regraspBadge.textContent = '실행 중 (조건 대기)'; }
+        if (regraspBtn)   regraspBtn.textContent = '■ ReGrasp Reflex 중지';
+      }
+
+      // 4. 그리퍼 닫기 (ReGrasp ON 상태에서 — 비대칭 접촉 시 reflex 발동)
+      setStatus('🤏 그리퍼 닫는 중...');
+      await apiFetch('/api/pub/hand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: '/ur5e/cmd/gripper', msg_type: 'std_msgs/msg/Float64',
+          msg_field: 'data', value: 1.0,
+        }),
+      });
+
+      setStatus('✅ 완료 — ReGrasp 감시 중');
+    } catch (e) {
+      setStatus(`❌ 오류: ${e.message}`);
     } finally {
       btn.disabled = false;
     }

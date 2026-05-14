@@ -260,10 +260,11 @@ class RobotiqGraspAdapter:
         # DOF 0: 그리퍼 (평균)
         grip = float(np.clip((qt[0, 0] + qt[1, 0]) / 2, 0.0, 1.0))
         self._ur.set_gripper(grip)
-        # DOF 1: 팔 Y lateral (차이 → 이동량)
+        # DOF 0 차이 → Y lateral 환산
+        # qt[0, 1]: 리플렉스 시작 시 캡처된 EE Y (execute() 첫 진입에서 고정)
+        # ee_pos[1]을 기준으로 쓰면 팔이 이동할수록 delta가 중복 적용되어 오버슈트 발생
         lateral_delta = (qt[0, 0] - qt[1, 0]) * _ARM_LATERAL_SCALE
-        ee_pos, _ = self._ur.get_ee_pose()
-        new_y = float(np.clip(ee_pos[1] - lateral_delta, -0.15, 0.15))
+        new_y = float(np.clip(qt[0, 1] - lateral_delta, -0.15, 0.15))
         target = self._ur.task_cmd["pos_target"].copy()
         target[1] = new_y
         self._ur.task_cmd["pos_target"] = target

@@ -2,6 +2,14 @@
 
 | Date | Description | Rollback Commit |
 |------|-------------|-----------------|
+| 2026-05-14 | [macos] Meshcat ghost finger 수정: Robotiq 2F-85 V4 그리퍼 패드(left_pad1/2, right_pad1/2)가 BOX 타입 geom으로 vis["env"]에 등록돼 초기 위치에 고정되는 현상 수정 → BOX 타입도 vis["robot"]으로 이동, update_visualizer가 PLANE 타입만 제외하고 모든 geom을 매 프레임 갱신하도록 변경. | `b2aa1cf` |
+| 2026-05-14 | [macos] ReGrasp lateral arm 오버슈트 버그 수정: _apply_regrasp_output()에서 매 스텝마다 ee_pos[1](현재 위치, 변화)을 기준으로 이동량을 누적해 오버슈트 발생 → qt[0,1](리플렉스 시작 시 캡처한 EE Y 고정값)을 기준으로 절대 목표 좌표를 계산하도록 수정. | `b2aa1cf` |
+| 2026-05-14 | [macos] object_approach_node에 _write_state() 추가: 접근 상태(stage, target, err)를 /tmp/approach_state.json에 원자적으로 기록해 대시보드 폴링 지원. | `b2aa1cf` |
+| 2026-05-14 | [macos] main.py에 /api/pub/approach, /api/approach_state 엔드포인트 추가: approach는 컨테이너 내 ros2 topic pub으로 /ur5e/approach/start 발행, approach_state는 컨테이너 내 /tmp/approach_state.json을 읽어 현재 접근 단계 반환. | `b2aa1cf` |
+| 2026-05-14 | [macos] 대시보드 "파지 & ReGrasp" 버튼 추가: 클릭 시 순서대로 (1) cylinder 접근 시작 → (2) /api/approach_state 폴링 DONE 대기 (최대 30s) → (3) ReGrasp 활성화 → (4) 그리퍼 완전 닫기 자동 수행. | `b2aa1cf` |
+| 2026-05-14 | [macos] 씬 물체 Box → Cylinder 변경: scene_config.py OBJECTS를 반지름 10cm / 높이 20cm 빨간 원통(name="cylinder", pos=[0.3,0,0.1])으로 교체. geom.size 3원소 요구사항 대응([r, h/2, 0.0]) 및 object_approach_node/index.html 내 물체 이름 "box" → "cylinder" 동기화. | `b2aa1cf` |
+| 2026-05-14 | [macos] 접근 목표 Y축 노이즈 추가: _cb_start에서 매 접근마다 N(0, 0.025m) 정규분포 ±5cm 클리핑 노이즈 샘플링, HOVER/DESCEND 목표 y 좌표에 반영해 그립 대칭성 편차 실험 가능. | `b2aa1cf` |
+| 2026-05-14 | [macos] _get_object_top_z() 헬퍼 추가: 물체 geom 타입별(CYLINDER/BOX/SPHERE/CAPSULE) 상단 z 좌표를 계산해 HOVER/DESCEND 목표 z를 물체 중심이 아닌 물체 상단 기준으로 산출 (원통 center_z=0.1m, top_z=0.2m 오류 수정). | `b2aa1cf` |
 | 2026-05-13 | [macos] README.md / PROJECT.md macOS 브랜치 기준으로 전면 재작성: 포트 변경, 인증 제거, start.sh 추가, main↔macos 차이점 표 추가. | `a402c30` |
 | 2026-05-13 | [macos] 로그인 인증 기능 전면 제거: main.py에서 HTTPBasic/secrets/require_auth 제거, index.html 로그인 오버레이 CSS·HTML·JS 제거, apiFetch()를 인증 없는 단순 fetch 래퍼로 교체. | `a402c30` |
 | 2026-05-13 | [macos] start.sh 추가: Docker 상태 확인 → 컨테이너 시작 → pip 패키지 확인 → 대시보드 백그라운드 실행을 한 명령으로 처리. `./start.sh stop`으로 전체 종료. | `23aca55` |
