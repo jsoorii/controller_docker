@@ -794,60 +794,71 @@ async def meshcat_static(path: str):
 async def meshcat_ws_proxy(websocket: WebSocket):
     await websocket.accept()
     port = get_meshcat_port()
+
+    async def _try_connect(p):
+        return await ws_lib.connect(
+            f"ws://localhost:{p}/",
+            max_size=None,          # 씬 데이터 크기 제한 없음
+            ping_interval=None,     # tornado 쪽 ping 충돌 방지
+        )
+
     try:
         try:
-            ws_conn = await ws_lib.connect(f"ws://localhost:{port}/")
+            meshcat = await _try_connect(port)
         except Exception:
-            # 연결 실패 → 캐시 무효화 후 새 포트로 재시도
             invalidate_meshcat_port_cache()
             port = get_meshcat_port()
-            ws_conn = await ws_lib.connect(f"ws://localhost:{port}/")
+            meshcat = await _try_connect(port)
     except Exception:
         try:
             await websocket.close()
         except Exception:
             pass
         return
+
+    async def fwd_to_client():
+        try:
+            async for msg in meshcat:
+                if isinstance(msg, bytes):
+                    await websocket.send_bytes(msg)
+                else:
+                    await websocket.send_text(msg)
+        except Exception:
+            pass
+
+    async def fwd_to_meshcat():
+        try:
+            while True:
+                data = await websocket.receive()
+                if data.get("type") == "websocket.disconnect":
+                    break
+                if data.get("bytes"):
+                    await meshcat.send(data["bytes"])
+                elif data.get("text"):
+                    await meshcat.send(data["text"])
+        except Exception:
+            pass
+
+    t1 = asyncio.create_task(fwd_to_client())
+    t2 = asyncio.create_task(fwd_to_meshcat())
     try:
-        async with ws_conn as meshcat:
-            async def fwd_to_client():
-                async for msg in meshcat:
-                    if isinstance(msg, bytes):
-                        await websocket.send_bytes(msg)
-                    else:
-                        await websocket.send_text(msg)
-
-            async def fwd_to_meshcat():
-                try:
-                    while True:
-                        data = await websocket.receive()
-                        if data.get("type") == "websocket.disconnect":
-                            break
-                        if data.get("bytes"):
-                            await meshcat.send(data["bytes"])
-                        elif data.get("text"):
-                            await meshcat.send(data["text"])
-                except Exception:
-                    pass
-
-            t1 = asyncio.create_task(fwd_to_client())
-            t2 = asyncio.create_task(fwd_to_meshcat())
+        done, pending = await asyncio.wait(
+            [t1, t2], return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
             try:
-                done, pending = await asyncio.wait(
-                    [t1, t2], return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-            except Exception:
-                t1.cancel()
-                t2.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
     except Exception:
-        pass
+        t1.cancel()
+        t2.cancel()
     finally:
+        try:
+            await meshcat.close()
+        except Exception:
+            pass
         try:
             await websocket.close()
         except Exception:

@@ -51,16 +51,21 @@ def get_geom_rgba(model, i):
     return rgba
 
 # 1. Meshcat에 로봇 메쉬 등록 (이게 실행되어야 화면에 보임)
-def setup_meshcat_robot(model, vis):
+def setup_meshcat_robot(model, data, vis):
     print("📦 로봇 메쉬 등록 중...")
     for i in range(model.ngeom):
         geom_name = f"geom_{i}"
         geom_type = model.geom_type[i]
 
+        pos = data.geom_xpos[i]
+        rot = data.geom_xmat[i].reshape(3, 3)
+        T = np.eye(4)
+        T[:3, :3] = rot
+        T[:3, 3] = pos
+
         # 메쉬 타입(Type 7)인 경우 처리
         if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
             mesh_id = model.geom_dataid[i]
-            # MuJoCo 메쉬 데이터를 추출
             vert_adr = model.mesh_vertadr[mesh_id]
             vert_num = model.mesh_vertnum[mesh_id]
             face_adr = model.mesh_faceadr[mesh_id]
@@ -71,7 +76,6 @@ def setup_meshcat_robot(model, vis):
 
             geom = g.TriangularMeshGeometry(vertices, faces)
 
-            # 색상 설정: material 색상 우선 적용
             rgba = get_geom_rgba(model, i)
             material = g.MeshLambertMaterial(
                 color=int('%02X%02X%02X' % tuple((rgba[:3]*255).astype(int)), 16),
@@ -79,10 +83,12 @@ def setup_meshcat_robot(model, vis):
             )
 
             vis["robot"][geom_name].set_object(geom, material)
+            vis["robot"][geom_name].set_transform(T)
 
-        # 기본 도형(Plane, Box 등)인 경우 간단히 처리
+        # 기본 도형(Plane, Box 등): 정적이므로 초기 한 번만 transform 설정
         elif geom_type == mujoco.mjtGeom.mjGEOM_PLANE:
             vis["env"][geom_name].set_object(g.Box([10, 10, 0.01]))
+            vis["env"][geom_name].set_transform(T)
 
         elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
             size = model.geom_size[i]  # half-sizes
@@ -92,23 +98,20 @@ def setup_meshcat_robot(model, vis):
                 opacity=float(rgba[3])
             )
             vis["env"][geom_name].set_object(g.Box(size * 2), material)
+            vis["env"][geom_name].set_transform(T)
 
-# 2. 매 프레임마다 로봇 위치 업데이트
+# 2. 매 프레임마다 로봇(mesh) geom 위치 업데이트 — env geom은 정적이라 제외
 def update_visualizer(vis, model, data):
     for i in range(model.ngeom):
+        if model.geom_type[i] != mujoco.mjtGeom.mjGEOM_MESH:
+            continue
         geom_name = f"geom_{i}"
         pos = data.geom_xpos[i]
         rot = data.geom_xmat[i].reshape(3, 3)
-
         T = np.eye(4)
         T[:3, :3] = rot
         T[:3, 3] = pos
-
-        # 등록된 타입에 따라 경로 분기
-        if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH:
-            vis["robot"][geom_name].set_transform(T)
-        elif model.geom_type[i] in (mujoco.mjtGeom.mjGEOM_PLANE, mujoco.mjtGeom.mjGEOM_BOX):
-            vis["env"][geom_name].set_transform(T)
+        vis["robot"][geom_name].set_transform(T)
 
 def main():
     # --- 모델 로드 ---
@@ -139,7 +142,7 @@ def main():
     mujoco.mj_forward(model, data)
 
     # 로봇 메쉬 등록 수행
-    setup_meshcat_robot(model, vis)
+    setup_meshcat_robot(model, data, vis)
 
     # --- 제어기 객체 생성 및 스레드 실행 ---
     controller = UR5eRTController(model, data, gripper_cfg=gripper_config.ACTIVE)
@@ -157,10 +160,13 @@ def main():
 
     # --- 메인 루프 (시각화 및 모니터링) ---
     print("\n🚀 제어 및 시각화 루프 가동 중...")
+    vis_frame = 0
     try:
         while True:
-            # 1. 시각화 업데이트
-            update_visualizer(vis, model, data)
+            # 1. 시각화 업데이트 (10Hz: 5프레임마다 1회 — ZMQ 과부하 방지)
+            vis_frame += 1
+            if vis_frame % 5 == 0:
+                update_visualizer(vis, model, data)
 
             # 폭발 감지 로그
             if np.any(np.abs(data.qvel) > 50):
