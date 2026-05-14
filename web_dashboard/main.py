@@ -77,8 +77,9 @@ def _find_meshcat_port() -> int:
                 ["cat", "/tmp/meshcat_port.txt"], stderr=False
             )
             if exit_code == 0 and output:
-                port = int(output.strip())
-                return port
+                container_port = int(output.strip())
+                # 컨테이너 내부 포트(7000-7010) → 호스트 매핑 포트(8000-8010)
+                return container_port + 1000 if 7000 <= container_port <= 7010 else container_port
         except Exception:
             pass
 
