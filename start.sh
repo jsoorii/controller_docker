@@ -93,7 +93,7 @@ for i in $(seq 1 20); do
         echo "    ✓ 서버 실행 완료 (PID: $DASHBOARD_PID)"
         echo ""
         echo "  대시보드:  http://$LOCAL_IP:$PORT"
-        echo "  Meshcat:   http://$LOCAL_IP:8000"
+        echo "  Meshcat:   http://$LOCAL_IP:$PORT/meshcat"
         echo ""
         echo "로그: tail -f $DASHBOARD_LOG  (대시보드)"
         echo "      tail -f $SIM_LOG        (시뮬레이션)"
