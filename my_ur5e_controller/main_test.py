@@ -9,7 +9,7 @@ import os
 
 import gripper_config
 import scene_config
-from ur5e_rt_controller import UR5eRTController, ControlState
+from ur5e_controller import UR5eController
 from robotiq_grasp_adapter import RobotiqGraspAdapter
 from object_approach_node import ObjectApproachNode
 
@@ -102,17 +102,48 @@ def setup_meshcat_robot(model, data, vis):
             vis["robot"][geom_name].set_object(g.Box(size * 2), material)
             vis["robot"][geom_name].set_transform(T)
 
+        # Meshcat Cylinder은 Y축 정렬, MuJoCo는 Z축 정렬 → Rx(90°) 보정 필요
+        elif geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+            size = model.geom_size[i]  # [radius, half_height, 0]
+            radius, half_h = float(size[0]), float(size[1])
+            rgba = get_geom_rgba(model, i)
+            material = g.MeshLambertMaterial(
+                color=int('%02X%02X%02X' % tuple((rgba[:3]*255).astype(int)), 16),
+                opacity=float(rgba[3])
+            )
+            R_fix = np.array([[1,0,0],[0,0,-1],[0,1,0]], dtype=float)
+            T_cyl = T.copy()
+            T_cyl[:3, :3] = rot @ R_fix
+            vis["robot"][geom_name].set_object(g.Cylinder(half_h * 2, radius), material)
+            vis["robot"][geom_name].set_transform(T_cyl)
+
+        elif geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+            size = model.geom_size[i]
+            rgba = get_geom_rgba(model, i)
+            material = g.MeshLambertMaterial(
+                color=int('%02X%02X%02X' % tuple((rgba[:3]*255).astype(int)), 16),
+                opacity=float(rgba[3])
+            )
+            vis["robot"][geom_name].set_object(g.Sphere(float(size[0])), material)
+            vis["robot"][geom_name].set_transform(T)
+
 # 2. 매 프레임마다 robot geom 위치 업데이트 — PLANE(env)만 제외
+_R_FIX_CYL = np.array([[1,0,0],[0,0,-1],[0,1,0]], dtype=float)
+
 def update_visualizer(vis, model, data):
     for i in range(model.ngeom):
-        if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_PLANE:
+        geom_type = model.geom_type[i]
+        if geom_type == mujoco.mjtGeom.mjGEOM_PLANE:
             continue
         geom_name = f"geom_{i}"
         pos = data.geom_xpos[i]
         rot = data.geom_xmat[i].reshape(3, 3)
         T = np.eye(4)
-        T[:3, :3] = rot
         T[:3, 3] = pos
+        if geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+            T[:3, :3] = rot @ _R_FIX_CYL
+        else:
+            T[:3, :3] = rot
         vis["robot"][geom_name].set_transform(T)
 
 def main():
@@ -140,6 +171,17 @@ def main():
     except Exception:
         pass
 
+    # UR5e "home" 키프레임으로 초기화 (J1=-90°, J2=-90°, J3=90°, J4=-90°, J5=-90°, J6=0°)
+    # 기본 qpos=0은 팔이 완전히 접힌 퇴화 자세라 IK 수렴이 불가능하다.
+    home_key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
+    if home_key >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, home_key)
+        print(f"✅ 'home' 키프레임으로 초기화 완료 (key_id={home_key})")
+    else:
+        # fallback: 수동으로 home 자세 설정
+        data.qpos[:6] = np.array([-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
+        print("⚠️  'home' 키프레임 없음 → 수동 초기화")
+
     # 초기 geom_xpos / geom_xmat 계산 (이 없으면 초기 위치가 전부 0)
     mujoco.mj_forward(model, data)
 
@@ -147,7 +189,8 @@ def main():
     setup_meshcat_robot(model, data, vis)
 
     # --- 제어기 객체 생성 및 스레드 실행 ---
-    controller = UR5eRTController(model, data, gripper_cfg=gripper_config.ACTIVE)
+    controller = UR5eController(model, data,
+                               gripper_cfg=gripper_config.ACTIVE)
     controller.start_ros_node()
     ctrl_thread = threading.Thread(target=controller.start, daemon=True)
     ctrl_thread.start()
@@ -157,7 +200,7 @@ def main():
     grasp_adapter.start_thread()
 
     # --- 물체 접근 노드 ---
-    approach_node = ObjectApproachNode(model, data)
+    approach_node = ObjectApproachNode(model, data, hover_height=0.05)
     approach_node.start_thread()
 
     # --- 메인 루프 (시각화 및 모니터링) ---
@@ -190,7 +233,8 @@ def main():
             else:
                 print(
                     f"\r[상태]: {controller.state.name} | Missed: {controller.miss_count}"
-                    f" | EE: [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}]"
+                    f" | EE(wrist): [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}]"
+                    f" | TGT: [{tgt[0]:.3f}, {tgt[1]:.3f}, {tgt[2]:.3f}]"
                     f" | err: {err:.4f}",
                     end=""
                 )

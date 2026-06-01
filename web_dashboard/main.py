@@ -532,6 +532,21 @@ async def pub_approach(body: dict):
     return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
 
 
+@app.post("/api/pub/approach_descend")
+async def pub_approach_descend():
+    """HOVER 완료 후 DESCEND 진행을 /ur5e/approach/descend 토픽으로 트리거한다."""
+    cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        "ros2 topic pub --times 3 --rate 100 --wait-matching-subscriptions 0 "
+        "/ur5e/approach/descend std_msgs/msg/String '{data: \"go\"}'"
+    )
+    container = get_container()
+    if container is None or container.status != "running":
+        raise HTTPException(status_code=409, detail="Container not running")
+    exit_code, output = container.exec_run(["/bin/bash", "-c", cmd], stderr=True)
+    return {"ok": exit_code == 0, "output": output.decode(errors="replace")}
+
+
 @app.get("/api/approach_state")
 async def approach_state():
     """컨테이너 내 /tmp/approach_state.json을 읽어 반환한다."""

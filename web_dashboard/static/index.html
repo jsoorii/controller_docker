@@ -59,6 +59,32 @@
   <!-- 핸드 제어 (hand_ui_config.py에서 동적으로 렌더링) -->
   <div id="hand-card-container"></div>
 
+  <!-- 접근 제어 -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      접근 제어
+      <span id="approach-stage-badge" class="badge bg-secondary px-2 py-1">IDLE</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-2 align-items-center mb-3">
+        <div class="col-auto"><label class="form-label small mb-0">물체 이름</label></div>
+        <div class="col-4">
+          <input type="text" id="approach-obj-name" class="form-control form-control-sm" value="cylinder" />
+        </div>
+        <div class="col-auto">
+          <span id="approach-err" class="text-muted small font-monospace"></span>
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-primary" onclick="approachHover()">🎯 HOVER</button>
+        <button class="btn btn-warning" onclick="approachDescend()">⬇ 접근</button>
+        <button class="btn btn-success" onclick="gripperClose()">✊ 그리퍼 닫기</button>
+        <button class="btn btn-outline-secondary" onclick="gripperOpen()">↔ 열기</button>
+      </div>
+      <div id="approach-status" class="text-muted small mt-2"></div>
+    </div>
+  </div>
+
   <!-- 로봇 제어 (탭) -->
   <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center"
@@ -1193,6 +1219,8 @@
           <div class="d-flex align-items-center gap-2 mt-1 mb-1">
             <button id="grasp-regrasp-btn" class="btn btn-outline-danger btn-sm"
                     onclick="graspAndRegrasp()">🤖 파지 &amp; ReGrasp</button>
+            <button id="grasp-cancel-btn" class="btn btn-outline-secondary btn-sm d-none"
+                    onclick="cancelGraspAndRegrasp()">✖ 중단</button>
             <span id="grasp-regrasp-status" class="text-muted small"></span>
           </div>
           ${weightSectionHtml}
@@ -1260,12 +1288,22 @@
   }
 
   // ── 파지 & ReGrasp 자동 시퀀스 ────────────────────────────────────────────
+  let _graspCancelled = false;
+
+  function cancelGraspAndRegrasp() {
+    _graspCancelled = true;
+    const cancelBtn = document.getElementById('grasp-cancel-btn');
+    if (cancelBtn) cancelBtn.disabled = true;
+  }
+
   async function graspAndRegrasp() {
-    const btn      = document.getElementById('grasp-regrasp-btn');
-    const statusEl = document.getElementById('grasp-regrasp-status');
+    const btn       = document.getElementById('grasp-regrasp-btn');
+    const cancelBtn = document.getElementById('grasp-cancel-btn');
+    const statusEl  = document.getElementById('grasp-regrasp-status');
     const regraspBadge = document.getElementById('regrasp-badge');
     const regraspBtn   = document.getElementById('regrasp-btn');
     btn.disabled = true;
+    _graspCancelled = false;
 
     const setStatus = (msg) => { if (statusEl) statusEl.textContent = msg; };
 
@@ -1279,20 +1317,44 @@
       });
       if (!approachRes.ok) { setStatus('❌ 접근 시작 실패'); return; }
 
-      // 2. 접근 완료(DONE)까지 폴링 (최대 30초)
-      let done = false;
+      // 2. HOVER 수렴까지 폴링 (최대 30초)
+      if (cancelBtn) { cancelBtn.classList.remove('d-none'); cancelBtn.disabled = false; }
+      let hoverDone = false;
       for (let i = 0; i < 60; i++) {
+        if (_graspCancelled) { setStatus('🛑 중단됨'); return; }
         await new Promise(r => setTimeout(r, 500));
+        if (_graspCancelled) { setStatus('🛑 중단됨'); return; }
         try {
           const stRes = await apiFetch('/api/approach_state');
           if (stRes.ok) {
             const st = await stRes.json();
-            if (st.stage === 'HOVER')   setStatus(`⏳ HOVER 이동 중... (err ${st.err.toFixed(3)}m)`);
-            if (st.stage === 'DESCEND') setStatus(`⏳ 하강 중... (err ${st.err.toFixed(3)}m)`);
-            if (st.stage === 'DONE')    { done = true; break; }
+            setStatus(`⏳ ${st.stage} 이동 중... (err ${st.err.toFixed(3)}m)`);
+            if (st.stage === 'HOVER' && st.err < 0.02) { hoverDone = true; break; }
           }
         } catch (_) {}
       }
+      if (!hoverDone) { if (cancelBtn) cancelBtn.classList.add('d-none'); setStatus('⏱ HOVER 타임아웃'); return; }
+
+      // 3. DESCEND 트리거
+      setStatus('⬇ 접근(DESCEND) 명령 전송 중...');
+      await apiFetch('/api/pub/approach_descend', { method: 'POST' });
+
+      // 4. DONE까지 폴링 (최대 15초)
+      let done = false;
+      for (let i = 0; i < 30; i++) {
+        if (_graspCancelled) { setStatus('🛑 중단됨'); return; }
+        await new Promise(r => setTimeout(r, 500));
+        if (_graspCancelled) { setStatus('🛑 중단됨'); return; }
+        try {
+          const stRes = await apiFetch('/api/approach_state');
+          if (stRes.ok) {
+            const st = await stRes.json();
+            setStatus(`⏳ ${st.stage} 이동 중... (err ${st.err.toFixed(3)}m)`);
+            if (st.stage === 'DONE') { done = true; break; }
+          }
+        } catch (_) {}
+      }
+      if (cancelBtn) cancelBtn.classList.add('d-none');
       if (!done) { setStatus('⏱ 타임아웃 — 접근 미완료'); return; }
 
       // 3. ReGrasp 먼저 활성화 (그리퍼 닫히는 동안 비대칭 접촉 감지)
@@ -1323,6 +1385,7 @@
       setStatus(`❌ 오류: ${e.message}`);
     } finally {
       btn.disabled = false;
+      if (cancelBtn) cancelBtn.classList.add('d-none');
     }
   }
 
@@ -1403,6 +1466,77 @@
     }
     const gi = parseInt(key.split('_')[0]);
     sendHandGroup(gi);
+  }
+
+  // ── 접근 제어 ─────────────────────────────────────────────────────────────
+  async function approachHover() {
+    const name = document.getElementById('approach-obj-name').value.trim() || 'cylinder';
+    const statusEl = document.getElementById('approach-status');
+    statusEl.textContent = '⏳ HOVER 명령 전송 중...';
+    const res = await apiFetch('/api/pub/approach', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) { statusEl.textContent = '❌ 전송 실패'; return; }
+    const d = await res.json();
+    statusEl.textContent = d.ok ? `✓ HOVER 명령 전송됨 (${name})` : `❌ ${d.output}`;
+  }
+
+  async function approachDescend() {
+    const statusEl = document.getElementById('approach-status');
+    statusEl.textContent = '⏳ 접근 명령 전송 중...';
+    const res = await apiFetch('/api/pub/approach_descend', { method: 'POST' });
+    if (!res.ok) { statusEl.textContent = '❌ 전송 실패'; return; }
+    const d = await res.json();
+    statusEl.textContent = d.ok ? '✓ 접근(DESCEND) 명령 전송됨' : `❌ ${d.output}`;
+  }
+
+  async function gripperClose() {
+    const statusEl = document.getElementById('approach-status');
+    statusEl.textContent = '⏳ 그리퍼 닫는 중...';
+    const res = await apiFetch('/api/pub/hand', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: '/ur5e/cmd/gripper', msg_type: 'std_msgs/msg/Float64', msg_field: 'data', value: 1.0 }),
+    });
+    if (!res.ok) { statusEl.textContent = '❌ 전송 실패'; return; }
+    const d = await res.json();
+    statusEl.textContent = d.ok ? '✓ 그리퍼 닫힘' : `❌ ${d.output}`;
+  }
+
+  async function gripperOpen() {
+    const statusEl = document.getElementById('approach-status');
+    statusEl.textContent = '⏳ 그리퍼 여는 중...';
+    const res = await apiFetch('/api/pub/hand', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: '/ur5e/cmd/gripper', msg_type: 'std_msgs/msg/Float64', msg_field: 'data', value: 0.0 }),
+    });
+    if (!res.ok) { statusEl.textContent = '❌ 전송 실패'; return; }
+    const d = await res.json();
+    statusEl.textContent = d.ok ? '✓ 그리퍼 열림' : `❌ ${d.output}`;
+  }
+
+  async function fetchApproachState() {
+    const badgeEl = document.getElementById('approach-stage-badge');
+    const errEl   = document.getElementById('approach-err');
+    if (!badgeEl) return;
+    try {
+      const res = await apiFetch('/api/approach_state');
+      if (!res.ok) return;
+      const d = await res.json();
+      const stageColors = {
+        IDLE:         'bg-secondary',
+        PRE_APPROACH: 'bg-info text-dark',
+        HOVER:        'bg-primary',
+        DESCEND:      'bg-warning text-dark',
+        DONE:         'bg-success',
+      };
+      badgeEl.className = `badge px-2 py-1 ${stageColors[d.stage] || 'bg-secondary'}`;
+      badgeEl.textContent = d.stage;
+      if (errEl) errEl.textContent = d.stage !== 'IDLE' ? `err: ${d.err.toFixed(3)}m` : '';
+    } catch (_) {}
   }
 
   // ── 물체 위치 발행 ────────────────────────────────────────────────────────
@@ -1546,6 +1680,7 @@
     setInterval(fetchSimErrors, 5000);
     setInterval(fetchRobotState, 1000);
     setInterval(fetchGraspState, 500);
+    setInterval(fetchApproachState, 1000);
   }
 
   // 노트 복원

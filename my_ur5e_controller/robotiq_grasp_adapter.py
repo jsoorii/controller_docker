@@ -78,7 +78,7 @@ class RobotiqGraspAdapter:
     """
 
     def __init__(self, model, data, ur_controller,
-                 hz: float = 100.0,
+                 hz: float = 200.0,
                  mu: float = 0.5,
                  slip_threshold: float = 0.85,
                  safety_factor: float = 0.60,
@@ -206,8 +206,11 @@ class RobotiqGraspAdapter:
         cs = ContactState()
         pad_set = set(self._pad_ids[fi])
 
-        for j in range(self._data.ncon):
-            c = self._data.contact[j]
+        ncon = int(self._data.ncon)
+        contacts = self._data.contact
+        n = min(ncon, len(contacts))
+        for j in range(n):
+            c = contacts[j]
             if int(c.geom1) not in pad_set and int(c.geom2) not in pad_set:
                 continue
 
@@ -227,8 +230,11 @@ class RobotiqGraspAdapter:
         """ReGraspReflex용 접촉 상태. contact_pos[0]을 EE 기준 Y 편차로 계산."""
         cs = ContactState()
         pad_set = set(self._pad_ids[fi])
-        for j in range(self._data.ncon):
-            c = self._data.contact[j]
+        ncon = int(self._data.ncon)
+        contacts = self._data.contact
+        n = min(ncon, len(contacts))
+        for j in range(n):
+            c = contacts[j]
             if int(c.geom1) not in pad_set and int(c.geom2) not in pad_set:
                 continue
             force6 = np.zeros(6)
@@ -320,8 +326,11 @@ class RobotiqGraspAdapter:
 
         for fi in range(2):
             pad_set = set(self._pad_ids[fi])
-            for j in range(self._data.ncon):
-                c = self._data.contact[j]
+            ncon = int(self._data.ncon)
+            contacts = self._data.contact
+            n = min(ncon, len(contacts))
+            for j in range(n):
+                c = contacts[j]
                 if int(c.geom1) not in pad_set and int(c.geom2) not in pad_set:
                     continue
 

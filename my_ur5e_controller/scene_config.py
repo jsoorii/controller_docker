@@ -41,8 +41,8 @@ class Cylinder:
 OBJECTS = [
     Cylinder(
         name = "cylinder",
-        pos  = [0.3, 0, 0.1],      # 중심 z = 절반높이 → 바닥 위에 세움
-        size = [0.1, 0.1],          # [반지름 10cm, 절반높이 10cm] → 직경 20cm / 높이 20cm
+        pos  = [-0.5, 0.2, 0.3],       # center z=0.30 → bottom z=0.00 (바닥 접지)
+        size = [0.02, 0.3],            # [반지름 3cm, 절반높이 30cm → 총 높이 60cm]
         rgba = [0.8, 0.15, 0.1, 1.0],
     ),
     # 추가 예시:

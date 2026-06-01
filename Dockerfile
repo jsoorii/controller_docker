@@ -15,7 +15,8 @@ RUN pip3 install \
     mujoco-python-viewer \
     meshcat \
     numpy \
-    transforms3d
+    transforms3d \
+    "mink[daqp]"
 
 # ROS2 워크스페이스 생성
 WORKDIR /ros2_ws/src

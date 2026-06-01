@@ -4,6 +4,7 @@ import os
 import time
 import threading
 import mujoco
+import mink
 from enum import Enum
 
 class ControlState(Enum):
@@ -59,11 +60,57 @@ class UR5eRTController:
         self.ee_max_acc  = ee_max_acc
         self.ee_max_jerk = ee_max_jerk
 
-        # IK parameters (damped least squares)
-        self._ik_pos_gain  = 5.0
-        self._ik_rot_gain  = 2.0
-        self._ik_lambda_sq = 1e-4
-        self._ik_max_dq    = 0.1    # max joint delta per step (rad)
+        # mink IK setup (100 Hz — 5 sim steps마다 1회 QP 풀기)
+        _gripper_dof_ids   = list(range(6, model.nv))
+        self._mink_cfg     = mink.Configuration(model, data.qpos.copy())
+        self._mink_ee_task = mink.FrameTask(
+            ee_body_name, "body",
+            position_cost=1.0,
+            orientation_cost=0.5,
+        )
+        self._mink_damping = mink.DampingTask(model, cost=1e-3)
+        self._mink_tasks   = [self._mink_ee_task, self._mink_damping]
+        if _gripper_dof_ids:
+            self._mink_tasks.append(mink.DofFreezingTask(model, _gripper_dof_ids))
+
+        # 바닥-팔 충돌 회피: 바닥(world body) 지옴 vs 팔 링크 지옴
+        _floor_geom_ids = [
+            gi for gi in range(model.ngeom)
+            if (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
+                                  int(model.geom_bodyid[gi])) or "") == "world"
+        ]
+        _arm_body_keywords = ("shoulder", "upper_arm", "forearm", "wrist")
+        _arm_geom_ids = [
+            gi for gi in range(model.ngeom)
+            if any(kw in (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
+                                             int(model.geom_bodyid[gi])) or "")
+                   for kw in _arm_body_keywords)
+        ]
+        _col_limit = None
+        if _floor_geom_ids and _arm_geom_ids:
+            _col_limit = mink.CollisionAvoidanceLimit(
+                model,
+                [(_floor_geom_ids, _arm_geom_ids)],
+                minimum_distance_from_collisions=0.015,   # 1.5cm 최소 거리
+                collision_detection_distance=0.08,        # 8cm 이내서 활성화
+            )
+        self._mink_limits  = [mink.VelocityLimit(model)]
+        if _col_limit is not None:
+            self._mink_limits.append(_col_limit)
+        self._mink_skip    = 0   # IK 스킵 카운터 (매 5스텝마다 1회 실행)
+
+        # 오프라인 pre-solve 상태 (home → target IK)
+        self._presolve_q:       np.ndarray | None = None   # 수렴된 관절각 (완료 시)
+        self._presolve_pos_tgt: np.ndarray        = np.zeros(3)
+        self._presolve_pending: bool              = False  # 백그라운드 실행 중
+
+        # home 키프레임 q (pre-solve 초기 자세)
+        _home_key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
+        if _home_key >= 0:
+            self._home_qpos = model.key_qpos[_home_key][:model.nq].copy()
+        else:
+            self._home_qpos = np.zeros(model.nq)
+            self._home_qpos[:6] = [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
 
         # PD gains
         self.kp = 500.0
@@ -107,6 +154,14 @@ class UR5eRTController:
         self.collision_info: dict = {}
         self._freeze_q: np.ndarray = np.zeros(6)
         self._robot_body_ids: set = self._build_robot_body_ids()
+        self._gripper_body_ids: set = self._build_gripper_body_ids()
+
+        # Self-collision / object-collision avoidance (repulsion torque)
+        self.self_collision_enabled: bool  = True
+        self.self_collision_kp:      float = 500.0   # 반발 강성 (N/m)
+        self.self_collision_kd:      float = 50.0    # 속도 감쇠 (N·s/m)
+        self._self_col_margin:       float = 0.02    # 근접 감지 거리 (m)
+        self._set_robot_geom_margins()
 
         # 충돌 직전 안전 위치 버퍼 (50스텝 = 0.1s @ 500Hz)
         self._safe_q_buf_size: int = 50
@@ -361,6 +416,77 @@ class UR5eRTController:
                     return
 
     # ------------------------------------------------------------------
+    # 오프라인 Pre-solve IK (home 자세에서 출발, 로컬 최솟값 탈출용)
+    # ------------------------------------------------------------------
+
+    def _presolve_ik_from_home(self, pos_target: np.ndarray, rot_target: np.ndarray):
+        """scipy L-BFGS-B로 홈→목표 IK 오프라인 풀기. 백그라운드 스레드 전용."""
+        from scipy.optimize import minimize as _sp_minimize
+
+        cfg = mink.Configuration(self.model, self._home_qpos.copy())
+        ee_id = self.ee_body_id
+        jnt_lo = self.model.jnt_range[:6, 0]
+        jnt_hi = self.model.jnt_range[:6, 1]
+        bounds = list(zip(jnt_lo.tolist(), jnt_hi.tolist()))
+
+        def _cost(q_arm):
+            q = self._home_qpos.copy()
+            q[:6] = q_arm
+            cfg.update(q)
+            return float(np.linalg.norm(cfg.data.xpos[ee_id] - pos_target) ** 2)
+
+        best_err = 9999.0
+        best_q: np.ndarray | None = None
+
+        # 1차: home 자세에서 직접 시작
+        res = _sp_minimize(_cost, self._home_qpos[:6].copy(),
+                           method="L-BFGS-B", bounds=bounds,
+                           options={"maxiter": 500, "ftol": 1e-14})
+        q_try = self._home_qpos.copy(); q_try[:6] = res.x; cfg.update(q_try)
+        err = float(np.linalg.norm(cfg.data.xpos[ee_id] - pos_target))
+        if err < best_err:
+            best_err = err; best_q = res.x.copy()
+
+        # 2차: 랜덤 초기화 멀티-재시작 (수렴 실패 시)
+        if best_err > 0.02:
+            rng = np.random.default_rng(0)
+            for _ in range(20):
+                q0 = rng.uniform(jnt_lo, jnt_hi)
+                res = _sp_minimize(_cost, q0, method="L-BFGS-B", bounds=bounds,
+                                   options={"maxiter": 300, "ftol": 1e-12})
+                q_try = self._home_qpos.copy(); q_try[:6] = res.x; cfg.update(q_try)
+                err = float(np.linalg.norm(cfg.data.xpos[ee_id] - pos_target))
+                if err < best_err:
+                    best_err = err; best_q = res.x.copy()
+                if best_err < 0.02:
+                    break
+
+        self._presolve_pending = False
+
+        if best_q is not None and best_err < 0.05:
+            # 관절각을 home 기준 가장 가까운 등가각으로 정규화
+            diff = best_q - self._home_qpos[:6]
+            n = np.round(diff / (2.0 * np.pi))
+            normalized = best_q - n * (2.0 * np.pi)
+            self._presolve_q       = normalized.copy()
+            self._presolve_pos_tgt = pos_target.copy()
+            print(f"\n[IK-PreSolve] 수렴  err={best_err:.4f}m"
+                  f"  q={np.round(np.degrees(normalized), 1).tolist()}")
+        else:
+            print(f"\n[IK-PreSolve] 수렴 실패  best_err={best_err:.4f}m")
+
+    def _start_presolve_thread(self, pos_target: np.ndarray, rot_target: np.ndarray):
+        """백그라운드에서 pre-solve 실행."""
+        self._presolve_q       = None
+        self._presolve_pending = True
+        self._presolve_pos_tgt = pos_target.copy()
+        threading.Thread(
+            target=self._presolve_ik_from_home,
+            args=(pos_target.copy(), rot_target.copy()),
+            daemon=True,
+        ).start()
+
+    # ------------------------------------------------------------------
     # Task-space helpers
     # ------------------------------------------------------------------
 
@@ -381,48 +507,62 @@ class UR5eRTController:
     def _ik_step(self):
         pos_cur, rot_cur = self.get_ee_pose()
 
-        # quintic 보간: 시작~끝 위치를 부드럽게 연결한 중간 목표를 IK에 전달
+        # 목표 위치 결정 (quintic profile 진행 중이면 중간 값, 아니면 static target)
         if self._ik_cmd_duration > 0.0:
             elapsed = time.perf_counter() - self._ik_cmd_start_time
             t_norm  = np.clip(elapsed / self._ik_cmd_duration, 0.0, 1.0)
-
-            # 출발/도착 속도가 있으면 blend 프로파일, 없으면 표준 quintic
             if self._ik_v0_norm != 0.0 or self._ik_v1_norm != 0.0:
                 alpha = self._smooth_alpha_blend(t_norm, self._ik_v0_norm, self._ik_v1_norm)
             else:
                 alpha = self._smooth_alpha(t_norm)
-
             pos_ref = self._ik_prof_pos_start + alpha * (self._ik_prof_pos_end - self._ik_prof_pos_start)
-            # 회전 보간: slerp 근사 (작은 각도에서 충분)
             rot_ref = self._ik_prof_rot_start + alpha * (self._ik_prof_rot_end - self._ik_prof_rot_start)
-            # 정규화
             U, _, Vt = np.linalg.svd(rot_ref)
             rot_ref = U @ Vt
-
             if t_norm >= 1.0:
-                self._ik_cmd_duration = 0.0  # 프로파일 종료
-                self._ik_v0_norm = 0.0
-                self._ik_v1_norm = 0.0
+                self._ik_cmd_duration = 0.0
+                self._ik_v0_norm = self._ik_v1_norm = 0.0
         else:
             pos_ref = self.task_cmd["pos_target"]
             rot_ref = self.task_cmd["rot_target"]
 
-        pos_err = pos_ref - pos_cur
-        dx_pos  = self._ik_pos_gain * pos_err
+        dist_to_target = float(np.linalg.norm(pos_cur - pos_ref))
 
-        rot_err = self._rot_error(rot_ref, rot_cur)
-        dx = np.concatenate([dx_pos, self._ik_rot_gain * rot_err])
+        # ── Case 1: pre-solve 완료 → 현재 EE가 타겟에서 멀면 joint 명령 유지 ──
+        presolve_q = self._presolve_q
+        dist_to_presolve = float(np.linalg.norm(self._presolve_pos_tgt - pos_cur))
+        if presolve_q is not None and dist_to_presolve > 0.02:
+            self.motor_cmd["q_target"] = presolve_q.copy()
+            return
 
-        nv = self.model.nv
-        jacp = np.zeros((3, nv))
-        jacr = np.zeros((3, nv))
-        mujoco.mj_jacBody(self.model, self.data, jacp, jacr, self.ee_body_id)
-        J = np.vstack([jacp[:, :6], jacr[:, :6]])
+        # ── Case 2: pre-solve 진행 중 → 현재 자세 유지 (velocity IK 비활성) ──
+        if self._presolve_pending and dist_to_presolve > 0.10:
+            # motor_cmd["q_target"] 그대로 유지 (arm hold)
+            return
 
-        A = J @ J.T + self._ik_lambda_sq * np.eye(6)
-        dq = J.T @ np.linalg.solve(A, dx)
-        dq = np.clip(dq, -self._ik_max_dq, self._ik_max_dq)
-        self.motor_cmd["q_target"] = self.motor_state["q"] + dq
+        # ── Case 3: velocity IK (근거리 fine-tuning 또는 pre-solve 실패 폴백) ─
+        self._mink_skip = (self._mink_skip + 1) % 5
+        if self._mink_skip != 0:
+            return
+
+        _ik_dt = self.dt * 5
+        self._mink_cfg.update(self.data.qpos.copy())
+
+        if dist_to_target > 0.10:
+            self._mink_ee_task.orientation_cost = 0.1
+        elif dist_to_target > 0.05:
+            self._mink_ee_task.orientation_cost = 0.3
+        else:
+            self._mink_ee_task.orientation_cost = 0.5
+
+        target_se3 = mink.SE3.from_rotation_and_translation(
+            mink.SO3.from_matrix(rot_ref), pos_ref
+        )
+        self._mink_ee_task.set_target(target_se3)
+        vel = mink.solve_ik(self._mink_cfg, self._mink_tasks, dt=_ik_dt,
+                            solver="daqp", limits=self._mink_limits, safety_break=False)
+        q_new = self._mink_cfg.integrate(vel, _ik_dt)
+        self.motor_cmd["q_target"] = q_new[:6]
 
     # ------------------------------------------------------------------
     # ROS2 subscription
@@ -604,6 +744,10 @@ class UR5eRTController:
         print(f"\n[ROS2] EE 타겟 수신: pos={np.round(pos, 3)}, duration={self._ik_cmd_duration:.1f}s"
               f", v0={self._ik_v0_norm:.2f}, v1={self._ik_v1_norm:.2f}")
 
+        # home 자세에서 pre-solve 시작 (dist > 0.1m 인 원거리 타겟만)
+        if dist > 0.10:
+            self._start_presolve_thread(pos, R)
+
     def _cb_ee_duration(self, msg):
         """std_msgs/Float64 → 다음 EE 명령의 이동 시간(초) 저장"""
         self._ros_ee_duration = float(msg.data)
@@ -716,6 +860,16 @@ class UR5eRTController:
         self._robot_base_body_id: int = last  # world(0)에 직접 연결된 베이스 링크
         return ids
 
+    def _build_gripper_body_ids(self) -> set:
+        """gripper/ 프리픽스를 가진 body ID 집합을 반환한다.
+        그리퍼는 물체와 정상 접촉하므로 외부 충돌 반발 대상에서 제외한다."""
+        ids = set()
+        for bid in range(self.model.nbody):
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, bid) or ""
+            if "gripper/" in name:
+                ids.add(bid)
+        return ids
+
     def _check_collision(self) -> bool:
         """mj_step() 이후 활성 접촉을 검사해 충돌을 감지한다.
 
@@ -752,6 +906,92 @@ class UR5eRTController:
             }
             return True
         return False
+
+    def _set_robot_geom_margins(self):
+        """로봇 링크 geom의 contact margin을 설정해 충돌 전 근접 접촉을 감지한다."""
+        for i in range(self.model.ngeom):
+            if self.model.geom_bodyid[i] in self._robot_body_ids:
+                self.model.geom_margin[i] = self._self_col_margin
+
+    def _repulsion_torque(self) -> np.ndarray:
+        """로봇 arm 링크의 근접 접촉에서 반발 토크를 계산한다.
+
+        dist < margin 인 접촉에 대해:
+          - 반발 강성: kp × (margin - dist)
+          - 속도 감쇠: kd × 접근속도  (접근할 때만)
+
+        처리 유형:
+          - self-collision  : arm ↔ arm  (인접 링크 제외)
+          - object-collision: arm ↔ 외부 물체 (그리퍼·베이스↔바닥 제외)
+        """
+        tau = np.zeros(6)
+        nv  = self.model.nv
+
+        for i in range(self.data.ncon):
+            c  = self.data.contact[i]
+            if c.dist >= self._self_col_margin:
+                continue
+
+            b1   = int(self.model.geom_bodyid[c.geom1])
+            b2   = int(self.model.geom_bodyid[c.geom2])
+            arm1 = b1 in self._robot_body_ids
+            arm2 = b2 in self._robot_body_ids
+
+            if not arm1 and not arm2:
+                continue  # 로봇 arm 무관 접촉
+
+            dist   = float(c.dist)
+            normal = c.frame[:3].copy()  # geom2 → geom1 방향 단위벡터
+            f_mag  = self.self_collision_kp * (self._self_col_margin - dist)
+
+            if arm1 and arm2:
+                # ── Self-collision: arm ↔ arm ─────────────────────────────
+                p1 = int(self.model.body_parentid[b1])
+                p2 = int(self.model.body_parentid[b2])
+                if p1 == b2 or p2 == b1:
+                    continue  # 인접 링크(관절 연결부) 제외
+
+                jacp1 = np.zeros((3, nv))
+                jacp2 = np.zeros((3, nv))
+                mujoco.mj_jac(self.model, self.data, jacp1, None, c.pos, b1)
+                mujoco.mj_jac(self.model, self.data, jacp2, None, c.pos, b2)
+                J_rel   = (jacp1 - jacp2)[:, :6]
+                v_close = -float(normal @ J_rel @ self.motor_state["dq"])
+                if v_close > 0.0:
+                    f_mag += self.self_collision_kd * v_close
+
+                F    = f_mag * normal
+                tau += jacp1[:, :6].T @ F
+                tau -= jacp2[:, :6].T @ F
+
+            else:
+                # ── Object-collision: arm ↔ 외부 물체 ────────────────────
+                if arm1:
+                    arm_body, arm_normal, ext_body = b1, normal, b2
+                else:
+                    arm_body, arm_normal, ext_body = b2, -normal, b1
+
+                # 그리퍼 body ↔ arm 접촉은 정상 근접이므로 제외
+                if ext_body in self._gripper_body_ids:
+                    continue
+                # 베이스 링크 ↔ world(바닥) 마운트 접촉 제외
+                if ext_body == 0 and arm_body == self._robot_base_body_id:
+                    continue
+
+                jacp_arm = np.zeros((3, nv))
+                jacp_ext = np.zeros((3, nv))
+                mujoco.mj_jac(self.model, self.data, jacp_arm, None, c.pos, arm_body)
+                if ext_body > 0:  # 동적 외부 물체: jacobian 계산
+                    mujoco.mj_jac(self.model, self.data, jacp_ext, None, c.pos, ext_body)
+
+                J_rel   = (jacp_arm - jacp_ext)[:, :6]
+                v_close = -float(arm_normal @ J_rel @ self.motor_state["dq"])
+                if v_close > 0.0:
+                    f_mag += self.self_collision_kd * v_close
+
+                tau += jacp_arm[:, :6].T @ (f_mag * arm_normal)
+
+        return np.clip(tau, -500.0, 500.0)
 
     def set_gripper(self, value: float):
         """그리퍼 개폐 명령. value: 0.0=완전 열림, 1.0=완전 닫힘"""
@@ -797,21 +1037,16 @@ class UR5eRTController:
         q   = self.motor_state["q"]
         dq  = self.motor_state["dq"]
 
-        # 소프트 리밋: q_target을 경계 내로 클램프 → PD가 한계 바깥을 목표로 삼지 않음
+        # 소프트 리밋: q_target을 경계 내로 클램프
         q_des = self.motor_cmd["q_target"].copy()
-        if self.soft_limit_enabled:
-            q_des = np.clip(q_des, self._soft_lo, self._soft_hi)
 
-        tau_out = (
-            self.kp * (q_des - q)
-            + self.kd * (0.0 - dq)
-            + self.data.qfrc_bias[:6]   # 중력 + 코리올리 + 원심력 보상
-        )
-
-        if self.soft_limit_enabled:
-            tau_out += self._soft_limit_torque(q, dq)
-
-        self.data.ctrl[:6] = tau_out
+        # UR5e menagerie는 위치 액추에이터 (kp=2000, kd=400 내장).
+        # ctrl = q_des(목표 위치)로 직접 전달하면 내장 PD가 적절한 힘을 계산한다.
+        # 이전 방식(토크 계산→ctrl 쓰기)은 위치 액추에이터에서 의도치 않은 double-cascade
+        # 효과를 만들어 수렴을 방해했다.
+        # 중력 feed-forward: kp*(ctrl-q_actual)=qfrc_bias → q_actual=ctrl-bias/kp
+        # feed-forward를 더하면 q_actual≈q_des 달성 → pos_gain 크기에 무관하게 중력 극복
+        self.data.ctrl[:6] = q_des + self.data.qfrc_bias[:6] / 2000.0
 
         # 그리퍼 제어 (actuator index 6, 범위 0~255)
         if self._gripper_act_id >= 0:
@@ -857,25 +1092,11 @@ class UR5eRTController:
                     self.state = ControlState.COLLISION_STOP
 
             elif self.state == ControlState.COLLISION_STOP:
-                # 감지된 위치에서 관절을 고정해 추가 운동 방지
-                q_cur  = self.data.qpos[:6]
-                dq_cur = self.data.qvel[:6]
-                self.data.ctrl[:6] = (
-                    self.kp * (self._freeze_q - q_cur)
-                    + self.kd * (0.0 - dq_cur)
-                    + self.data.qfrc_bias[:6]
-                )
+                self.data.ctrl[:6] = self._freeze_q
                 mujoco.mj_step(self.model, self.data)
 
             elif self.state == ControlState.COLLISION_ESCAPE:
-                # 충돌 직전 안전 위치로 PD 제어하며 후퇴
-                q_cur  = self.data.qpos[:6]
-                dq_cur = self.data.qvel[:6]
-                self.data.ctrl[:6] = (
-                    self.kp * (self._escape_target_q - q_cur)
-                    + self.kd * (0.0 - dq_cur)
-                    + self.data.qfrc_bias[:6]
-                )
+                self.data.ctrl[:6] = self._escape_target_q
                 mujoco.mj_step(self.model, self.data)
                 # 충돌이 해제되면 정상 제어로 복귀
                 if not self._check_collision():

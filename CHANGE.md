@@ -1,5 +1,133 @@
 # Change Log
 
+---
+
+## 2026-05-24 PRE_APPROACH J6 90° 회전 + 충돌 오탐 수정 + mink 의존성 영구 등록
+
+### 변경 파일
+- **수정**: `my_ur5e_controller/ur5e_controller.py`
+- **수정**: `my_ur5e_controller/object_approach_node.py`
+- **수정**: `Dockerfile`
+- **수정**: `start.sh`
+
+### ur5e_controller.py 변경
+
+#### 1. `rotmat_axis_angle(axis, angle_deg)` — 모듈 레벨 헬퍼 추가
+Rodrigues 공식으로 임의 축+각도 → 3×3 회전행렬 반환.
+
+#### 2. `rotate_ee_target(axis, angle_deg, frame)` — 메서드 추가
+현재 EE 타겟 방향에 추가 회전을 적용한다.
+```python
+# 사용 예시
+controller.rotate_ee_target('z', 90.0)          # EE 로컬 z축으로 90°
+controller.rotate_ee_target('z', 45.0, 'world') # 월드 Z축으로 45°
+controller.rotate_ee_target(np.array([0,0,1]), -30.0)
+```
+
+#### 3. `_build_robot_body_ids()` 리팩터링 + 충돌 오탐 수정
+```
+변경 전: arm 체인만 추적 → forearm_link ↔ gripper/right_coupler(dist=-0.00071m) 오탐 → 즉시 COLLISION_STOP
+변경 후: arm_ids + gripper_ids = all_robot_ids, 두 body 모두 내부이면 무시
+```
+- `_gripper_body_ids`: 이름 패턴(`gripper`, `coupler`, `finger`, `pad`, `knuckle` 등)으로 자동 식별
+- `_check_collision()`: `both in _all_robot_ids → continue` 필터 추가
+
+### object_approach_node.py 변경
+
+#### `_safe_z_rot_deg()` — 신규 메서드
+MuJoCo 모델에서 `wrist_3` 조인트 range를 직접 읽어 +90°/−90° 중 J6 한계에 여유 있는 방향 반환.
+둘 다 가능하면 중심(0)에 가까운 방향 우선.
+
+#### `_cb_start()` 수정 — PRE_APPROACH 90° 회전 적용
+```python
+# approach_rot 계산 후
+rot_deg      = self._safe_z_rot_deg()
+wrist_y      = approach_rot[:, 1]   # J6 회전축 = col1(approach_dir)
+approach_rot = _rotmat_axis_angle(wrist_y, rot_deg) @ approach_rot
+# col1(approach_dir)이 그대로 유지되어 위치 타겟 계산 정상
+```
+
+> **주의**: col2(wrist_z)로 회전하면 col1(approach_dir)이 [0,0,1](수직)으로 바뀌어 위치 타겟 계산이 깨짐.
+> J6 회전축 = col1(wrist_y) 기준으로 회전해야 approach_dir이 유지됨.
+
+### Dockerfile / start.sh
+- `Dockerfile`: `pip3 install "mink[daqp]"` 추가 — 이미지 빌드 시 자동 설치
+- `start.sh`: 시뮬레이션 시작 전 `python3 -c "import mink"` 확인 후 없으면 자동 설치 (컨테이너 재시작 대응)
+
+### 최종 검증 결과
+```
+EE-z 회전=+90°  approach_rot col1=[-0.928, 0.371, 0.0]
+PRE_APPROACH(err=0.009m) → HOVER(err=0.007m) → DESCEND(err=0.009m) → DONE ✓
+COLLISION_STOP 없음, forearm↔gripper 오탐 제거 확인
+```
+
+---
+
+## 2026-05-24 컨트롤러 교체: ur5e_rt_controller → ur5e_controller
+
+### 변경 파일
+- **신규**: `my_ur5e_controller/ur5e_controller.py`
+- **수정**: `my_ur5e_controller/main_test.py`
+- **보존** (삭제 안 함): `my_ur5e_controller/ur5e_rt_controller.py`
+
+### main_test.py 변경 내역
+
+| 위치 | 변경 전 | 변경 후 |
+|------|---------|---------|
+| import | `from ur5e_rt_controller import UR5eRTController, ControlState` | `from ur5e_controller import UR5eController` |
+| 생성자 | `UR5eRTController(model, data, ee_max_vel=0.25, gripper_cfg=...)` | `UR5eController(model, data, gripper_cfg=...)` |
+
+`ControlState`는 main_test.py에서 직접 참조하지 않아 import 제거.
+
+### 복구 방법
+```python
+# main_test.py 2줄만 되돌리면 구 컨트롤러로 즉시 복구
+from ur5e_rt_controller import UR5eRTController, ControlState
+controller = UR5eRTController(model, data, ee_max_vel=0.25, gripper_cfg=gripper_config.ACTIVE)
+```
+
+### 신규 컨트롤러에서 제거된 기능 (ur5e_rt_controller.py에 코드 보존됨)
+
+#### 1. Scipy Pre-solve IK
+`_presolve_ik_from_home()`, `_start_presolve_thread()`
+
+원거리 목표(>10cm)에 대해 scipy L-BFGS-B로 home 출발 오프라인 IK를 풀어
+PD 제어로 gross motion 수행. `_ik_step()` 내 Case 1/2/3 분기 로직 포함.
+
+#### 2. Quintic Trajectory Profile
+`_compute_min_duration()`, `_smooth_alpha()`, `_smooth_alpha_blend()`
+
+vel/acc/jerk 한계를 만족하는 최소 이동 시간을 이진탐색으로 계산 + quintic polynomial 보간.
+연속 블렌딩(이동 중 새 명령 시 현재 속도 이어받기) 포함.
+
+#### 3. Soft Joint Limits
+`_soft_limit_torque()`, `_update_soft_limits()`
+
+관절 한계 내측 margin 진입 시 반발 강성(kp) + 속도 감쇠(kd) 토크 인가.
+ROS2 `/ur5e/cmd/soft_limits` 런타임 파라미터 조정 가능.
+
+#### 4. Self/Object Collision Repulsion Torque
+`_repulsion_torque()`, `_set_robot_geom_margins()`
+
+팔↔팔·팔↔외부 물체 근접(< 2cm) 시 Jacobian 기반 반발 토크를 ctrl에 합산.
+(mink CollisionAvoidanceLimit과 별개의 추가 레이어)
+
+#### 5. COLLISION_ESCAPE 상태 + 안전 위치 버퍼
+`reset_collision()` + `_safe_q_buffer`
+
+충돌 감지 직전 50스텝(0.1s) 관절 위치 버퍼 유지.
+충돌 리셋 시 버퍼 내 가장 오래된 안전 위치로 후퇴 후 정상 제어 복귀.
+
+#### 6. Joint Trajectory 수신
+`set_trajectory()`, `_traj_step()`, `_cb_joint_traj()`
+
+`/ur5e/cmd/joint_trajectory` 토픽으로 웨이포인트 기반 관절 궤적 실행.
+
+#### 7. 복잡한 초기화 상태머신
+WAIT_STABLE → INIT_CONTROL → CHECK_MOTOR → INIT_POSITION 단계별 초기화 시퀀스.
+
+---
+
 | Date | Description | Rollback Commit |
 |------|-------------|-----------------|
 | 2026-05-14 | [macos] Meshcat ghost finger 수정: Robotiq 2F-85 V4 그리퍼 패드(left_pad1/2, right_pad1/2)가 BOX 타입 geom으로 vis["env"]에 등록돼 초기 위치에 고정되는 현상 수정 → BOX 타입도 vis["robot"]으로 이동, update_visualizer가 PLANE 타입만 제외하고 모든 geom을 매 프레임 갱신하도록 변경. | `b2aa1cf` |
